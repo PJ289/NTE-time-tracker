@@ -1,0 +1,517 @@
+/* ── Reset & Base ───────────────────────────────────────────────── */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: #0f0f0f;
+  color: #e0e0e0;
+  min-height: 100vh;
+  padding: 2rem;
+}
+
+/* ── Background Character Art ──────────────────────────────────── */
+
+.bg-character {
+  position: fixed;
+  left: -60px;
+  bottom: 0;
+  height: 100vh;
+  width: auto;
+  opacity: 0.08;
+  pointer-events: none;
+  z-index: 0;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,1) 40%, rgba(0,0,0,0) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,1) 40%, rgba(0,0,0,0) 100%);
+}
+
+/* ── Layout ────────────────────────────────────────────────────── */
+
+.container {
+  max-width: 720px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 1;
+}
+
+/* ── Header ────────────────────────────────────────────────────── */
+
+header {
+  text-align: center;
+  margin-bottom: 2rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid #2a2a2a;
+}
+
+h1 {
+  font-size: 1.4rem;
+  font-weight: 500;
+  color: #888;
+  margin-bottom: 1rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.total-time {
+  font-size: 3.5rem;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1;
+}
+
+.total-time .unit {
+  font-size: 1.5rem;
+  color: #666;
+  font-weight: 400;
+}
+
+.subtitle {
+  color: #555;
+  font-size: 0.85rem;
+  margin-top: 0.75rem;
+}
+
+/* ── Share Button ─────────────────────────────────────────────── */
+
+.share-btn {
+  margin-top: 0.75rem;
+  background: #1e1e1e;
+  color: #aaa;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 0.4rem 1rem;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.75rem;
+  letter-spacing: 0.03em;
+  transition: background 0.2s, color 0.2s;
+}
+
+.share-btn:hover {
+  background: #2a2a2a;
+  color: #fff;
+  border-color: #4db8ff;
+}
+
+/* ── Stats Row ─────────────────────────────────────────────────── */
+
+.stats-row {
+  display: flex;
+  justify-content: center;
+  gap: 1.5rem;
+  margin-top: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.stat {
+  text-align: center;
+}
+
+.stat-value {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #ccc;
+}
+
+.stat-label {
+  font-size: 0.7rem;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 0.1rem;
+}
+
+/* ── Live Banner ───────────────────────────────────────────────── */
+
+.live-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  margin-bottom: 1rem;
+  background: #1a1a1a;
+  border: 1px solid #1e3a5a;
+  border-radius: 8px;
+}
+
+.live-dot {
+  width: 10px;
+  height: 10px;
+  background: #4db8ff;
+  border-radius: 50%;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.live-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #4db8ff;
+  letter-spacing: 0.08em;
+}
+
+.live-info {
+  color: #888;
+  font-size: 0.85rem;
+}
+
+/* ── Tabs ──────────────────────────────────────────────────────── */
+
+.tab-bar {
+  display: flex;
+  gap: 0;
+  margin-bottom: 1.5rem;
+  border-bottom: 1px solid #2a2a2a;
+}
+
+.tab-btn {
+  background: none;
+  border: none;
+  color: #555;
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.6rem 1.2rem;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.2s, border-color 0.2s;
+  letter-spacing: 0.03em;
+}
+
+.tab-btn:hover {
+  color: #aaa;
+}
+
+.tab-btn.active {
+  color: #fff;
+  border-bottom-color: #4db8ff;
+}
+
+.tab-content {
+  display: none;
+}
+
+.tab-content.active {
+  display: block;
+}
+
+/* ── Day Card ──────────────────────────────────────────────────── */
+
+.day {
+  margin-bottom: 1rem;
+  background: #181818;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #222;
+}
+
+.day-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background: #1e1e1e;
+  border-bottom: 1px solid #222;
+}
+
+.day-header.clickable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.day-header.clickable:hover {
+  background: #252525;
+}
+
+.day-date {
+  font-weight: 600;
+  color: #ddd;
+  font-size: 0.95rem;
+}
+
+.day-stats {
+  color: #666;
+  font-size: 0.8rem;
+}
+
+/* ── Collapsible ───────────────────────────────────────────────── */
+
+.chevron {
+  color: #555;
+  font-size: 0.7rem;
+  margin-right: 0.5rem;
+  transition: transform 0.2s;
+  display: inline-block;
+}
+
+.chevron.open {
+  transform: rotate(90deg);
+}
+
+.day-body {
+  display: none;
+}
+
+.day-body.open {
+  display: block;
+}
+
+.day-scroll {
+  max-height: 210px;
+  overflow-y: auto;
+}
+
+.day-scroll::-webkit-scrollbar { width: 6px; }
+.day-scroll::-webkit-scrollbar-track { background: #181818; }
+.day-scroll::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+
+/* ── Session Table ─────────────────────────────────────────────── */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th {
+  text-align: left;
+  padding: 0.5rem 1rem;
+  font-size: 0.7rem;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+}
+
+td {
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  color: #bbb;
+  border-top: 1px solid #1a1a1a;
+  font-variant-numeric: tabular-nums;
+}
+
+tr:hover td {
+  background: #1c1c1c;
+}
+
+td:last-child {
+  color: #fff;
+  font-weight: 500;
+}
+
+/* ── Pagination ────────────────────────────────────────────────── */
+
+.page-nav {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 1rem 0;
+  flex-wrap: wrap;
+}
+
+.page-btn {
+  background: #1e1e1e;
+  color: #aaa;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 0.35rem 0.65rem;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-family: inherit;
+  min-width: 1.8rem;
+}
+
+.page-btn:hover {
+  background: #2a2a2a;
+  color: #fff;
+}
+
+.page-btn.active {
+  background: #2a2a2a;
+  color: #fff;
+  border-color: #4db8ff;
+}
+
+.page-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.page-btn:disabled:hover {
+  background: #1e1e1e;
+  color: #aaa;
+}
+
+.page-ellipsis {
+  color: #555;
+  padding: 0 0.2rem;
+  font-size: 0.75rem;
+}
+
+/* ── Calendar ──────────────────────────────────────────────────── */
+
+.cal-widget {
+  margin-bottom: 1.5rem;
+  max-width: 320px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.cal-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.4rem;
+}
+
+.cal-nav button {
+  background: #1e1e1e;
+  color: #aaa;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 0.2rem 0.5rem;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-family: inherit;
+}
+
+.cal-nav button:hover {
+  background: #2a2a2a;
+  color: #fff;
+}
+
+.cal-month-label {
+  font-size: 0.8rem;
+  color: #ccc;
+  font-weight: 600;
+}
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 1px;
+}
+
+.cal-dow {
+  text-align: center;
+  font-size: 0.55rem;
+  color: #555;
+  text-transform: uppercase;
+  padding: 0.15rem 0;
+}
+
+.cal-cell {
+  aspect-ratio: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  color: #444;
+  border-radius: 4px;
+}
+
+.cal-cell.has-sessions {
+  color: #ccc;
+  cursor: pointer;
+}
+
+.cal-cell.has-sessions:hover {
+  background: #2a2a2a;
+}
+
+.cal-cell.today {
+  outline: 1px solid #444;
+}
+
+.cal-cell.selected {
+  background: #2a2a2a;
+  color: #fff;
+}
+
+/* Calendar dot heatmap: t1 = <1h, t2 = 1-3h, t3 = 3-6h, t4 = >6h (marathon) */
+.cal-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  margin-top: 1px;
+}
+
+.cal-dot.t1 { background: #1976d2; }
+.cal-dot.t2 { background: #4db8ff; }
+.cal-dot.t3 { background: #80d8ff; }
+.cal-dot.t4 { background: #00e5ff; box-shadow: 0 0 4px #00e5ff; }
+
+/* ── Time-of-Day Heatmap ──────────────────────────────────────── */
+
+.heatmap-widget {
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background: #181818;
+  border: 1px solid #222;
+  border-radius: 8px;
+}
+
+.heatmap-title {
+  font-size: 0.7rem;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-align: center;
+  margin-bottom: 0.75rem;
+}
+
+.heatmap-grid {
+  display: flex;
+  gap: 2px;
+  align-items: flex-end;
+  height: 60px;
+}
+
+.heatmap-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  justify-content: flex-end;
+}
+
+.heatmap-bar {
+  width: 100%;
+  border-radius: 2px 2px 0 0;
+  min-width: 4px;
+  transition: height 0.3s;
+}
+
+.heatmap-bar.h1 { background: #1976d2; }
+.heatmap-bar.h2 { background: #4db8ff; }
+.heatmap-bar.h3 { background: #80d8ff; }
+
+.heatmap-label {
+  font-size: 0.5rem;
+  color: #444;
+  margin-top: 2px;
+}
+
+/* ── Status Bar ────────────────────────────────────────────────── */
+
+.status-bar {
+  text-align: center;
+  padding: 0.5rem;
+  color: #555;
+  font-size: 0.75rem;
+}
+
+.status-bar.offline {
+  color: #c62828;
+}

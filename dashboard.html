@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NTE Playtime Tracker</title>
+  <link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+  <img class="bg-character" src="/bg.png" alt="">
+
+  <div class="container">
+    <header>
+      <h1>Neverness to Everness</h1>
+      <div class="total-time" id="total-time"></div>
+      <div class="stats-row">
+        <div class="stat">
+          <div class="stat-value" id="session-count"></div>
+          <div class="stat-label">Sessions</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" id="days-count"></div>
+          <div class="stat-label">Days Played</div>
+        </div>
+      </div>
+      <div class="stats-row" id="extra-stats"></div>
+      <div class="subtitle" id="last-updated"></div>
+      <button class="share-btn" onclick="window.open('/share','_blank')">Share Stats</button>
+    </header>
+
+    <div id="time-heatmap" class="heatmap-widget"></div>
+
+    <div id="live-banner"></div>
+
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="calendar">Calendar</button>
+      <button class="tab-btn" data-tab="all">All Sessions</button>
+    </div>
+
+    <div id="tab-calendar" class="tab-content active">
+      <div id="calendar-widget" class="cal-widget"></div>
+      <div id="cal-day-view"></div>
+    </div>
+
+    <div id="tab-all" class="tab-content">
+      <div id="all-content"></div>
+    </div>
+
+    <div class="status-bar" id="status"></div>
+  </div>
+
+  <script src="/dashboard.js"></script>
+</body>
+</html>
