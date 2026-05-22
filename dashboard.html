@@ -25,6 +25,11 @@
       </div>
       <div class="stats-row" id="extra-stats"></div>
       <div class="subtitle" id="last-updated"></div>
+      <div class="filter-bar">
+        <label for="device-filter">Device Filter</label>
+        <select id="device-filter"></select>
+        <span id="device-filter-label" class="filter-label"></span>
+      </div>
       <button class="share-btn" onclick="window.open('/share','_blank')">Share Stats</button>
     </header>
 
@@ -35,6 +40,8 @@
     <div class="tab-bar">
       <button class="tab-btn active" data-tab="calendar">Calendar</button>
       <button class="tab-btn" data-tab="all">All Sessions</button>
+      <button class="tab-btn" data-tab="devices">Devices</button>
+      <button class="tab-btn" data-tab="config">Config</button>
     </div>
 
     <div id="tab-calendar" class="tab-content active">
@@ -43,7 +50,167 @@
     </div>
 
     <div id="tab-all" class="tab-content">
+      <div class="session-tools">
+        <div class="session-tools-row">
+          <div class="session-tools-group">
+            <span class="session-tools-label">Selection</span>
+            <button id="combine-btn" class="session-tool-btn">Combine Selected</button>
+            <button id="clear-selection" class="session-tool-btn ghost">Clear</button>
+            <span id="combine-status" class="session-tools-status"></span>
+          </div>
+          <div class="session-tools-group">
+            <span class="session-tools-label">Paging</span>
+            <label for="page-select" class="paging-label">Page</label>
+            <input id="page-select" class="paging-control" type="number" min="1" step="1">
+            <label for="page-size" class="paging-label">Days</label>
+            <select id="page-size" class="paging-control"></select>
+          </div>
+        </div>
+      </div>
+
+      <div class="manual-panel">
+        <div class="manual-title">Manual Session</div>
+        <div class="manual-grid">
+          <div>
+            <label for="manual-start">Start</label>
+            <input id="manual-start" type="datetime-local">
+          </div>
+          <div>
+            <label for="manual-end">End</label>
+            <input id="manual-end" type="datetime-local">
+          </div>
+          <div>
+            <label for="manual-device">Device</label>
+            <select id="manual-device"></select>
+          </div>
+          <div class="manual-flag">
+            <label>Manual</label>
+            <label class="manual-toggle">
+              <input id="manual-flag" type="checkbox" checked>
+              <span>Enabled</span>
+            </label>
+          </div>
+        </div>
+        <div class="manual-actions">
+          <button id="manual-save" class="session-tool-btn">Add Session</button>
+          <span id="manual-status" class="session-tools-status"></span>
+        </div>
+      </div>
+
       <div id="all-content"></div>
+    </div>
+
+    <div id="tab-devices" class="tab-content">
+      <div class="device-panel">
+        <div class="device-panel-header">
+          <div class="device-panel-title">Device Management</div>
+          <div class="device-panel-subtitle">Admin token required for edits</div>
+        </div>
+        <div class="device-admin">
+          <label for="admin-token" class="device-admin-label">Admin Token</label>
+          <input id="admin-token" type="password" placeholder="Paste admin token">
+          <button id="admin-token-save" class="device-admin-btn">Save</button>
+          <button id="admin-token-clear" class="device-admin-btn ghost">Clear</button>
+          <span id="admin-token-status" class="device-admin-status"></span>
+        </div>
+      </div>
+
+      <div class="device-panel">
+        <div class="device-panel-header">
+          <div class="device-panel-title">Create Device</div>
+          <div class="device-panel-subtitle">Generates a new device + token</div>
+        </div>
+        <div class="device-create-grid">
+          <div>
+            <label for="device-create-name">Name</label>
+            <input id="device-create-name" type="text" placeholder="Device name">
+          </div>
+          <div>
+            <label for="device-create-type">Type</label>
+            <select id="device-create-type"></select>
+          </div>
+          <div>
+            <label for="device-create-color">Color</label>
+            <input id="device-create-color" type="color" value="#4db8ff">
+          </div>
+          <div class="device-create-flag">
+            <label>Test Device</label>
+            <input id="device-create-test" type="checkbox">
+          </div>
+        </div>
+        <div class="device-create-actions">
+          <button id="device-create-btn" class="device-admin-btn">Create</button>
+          <span id="device-create-status" class="device-admin-status"></span>
+        </div>
+      </div>
+
+      <div id="device-list" class="device-list"></div>
+    </div>
+
+    <div id="tab-config" class="tab-content">
+      <div class="device-panel">
+        <div class="device-panel-header">
+          <div class="device-panel-title">Server Config</div>
+          <div class="device-panel-subtitle">Admin token required · restart may be needed</div>
+        </div>
+        <div class="config-grid">
+          <div>
+            <label for="config-host">Host</label>
+            <input id="config-host" type="text" placeholder="0.0.0.0">
+          </div>
+          <div>
+            <label for="config-port">Port</label>
+            <input id="config-port" type="number" min="1" max="65535">
+          </div>
+          <div>
+            <label for="config-data-dir">Data Dir</label>
+            <input id="config-data-dir" type="text" placeholder="C:\\path\\to\\data">
+          </div>
+          <div>
+            <label for="config-min-session">Min Session (sec)</label>
+            <input id="config-min-session" type="number" min="0">
+          </div>
+          <div>
+            <label for="config-merge-gap">Merge Gap (sec)</label>
+            <input id="config-merge-gap" type="number" min="0">
+          </div>
+        </div>
+        <div class="device-create-actions">
+          <button id="config-load" class="device-admin-btn ghost">Load</button>
+          <button id="config-save" class="device-admin-btn">Save</button>
+          <span id="config-status" class="device-admin-status"></span>
+        </div>
+      </div>
+    </div>
+
+    <div id="session-modal" class="modal">
+      <div class="modal-card">
+        <div class="modal-title">Edit Session</div>
+        <div class="modal-grid">
+          <div>
+            <label for="edit-start">Start</label>
+            <input id="edit-start" type="datetime-local">
+          </div>
+          <div>
+            <label for="edit-end">End</label>
+            <input id="edit-end" type="datetime-local">
+          </div>
+          <div>
+            <label for="edit-device">Device</label>
+            <select id="edit-device"></select>
+          </div>
+          <div class="modal-flag">
+            <label>Manual</label>
+            <input id="edit-manual" type="checkbox">
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button id="edit-save" class="session-tool-btn">Save</button>
+          <button id="edit-cancel" class="session-tool-btn ghost">Cancel</button>
+          <button id="edit-delete" class="session-tool-btn danger">Delete</button>
+          <span id="edit-status" class="session-tools-status"></span>
+        </div>
+      </div>
     </div>
 
     <div class="status-bar" id="status"></div>

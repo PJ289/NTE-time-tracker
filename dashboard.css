@@ -75,6 +75,38 @@ h1 {
   margin-top: 0.75rem;
 }
 
+.filter-bar {
+  margin-top: 0.75rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: #161616;
+  border: 1px solid #222;
+  border-radius: 8px;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.7rem;
+  color: #777;
+}
+
+.filter-bar label {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.filter-bar select {
+  background: #0f0f0f;
+  border: 1px solid #333;
+  border-radius: 6px;
+  color: #ddd;
+  padding: 0.25rem 0.4rem;
+  font-size: 0.75rem;
+}
+
+.filter-label {
+  font-size: 0.65rem;
+  color: #666;
+}
+
 /* ── Share Button ─────────────────────────────────────────────── */
 
 .share-btn {
@@ -307,6 +339,59 @@ td:last-child {
   font-weight: 500;
 }
 
+td.device-cell {
+  color: inherit;
+  font-weight: 500;
+}
+
+.device-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--device-color, #3a3a3a);
+  color: var(--device-text, #111);
+  white-space: nowrap;
+}
+
+.device-tag .device-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.device-test-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px dashed #ff7043;
+  color: #ff7043;
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-left: 6px;
+}
+
+.manual-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid #4db8ff;
+  color: #4db8ff;
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-left: 6px;
+}
+
 /* ── Pagination ────────────────────────────────────────────────── */
 
 .page-nav {
@@ -355,6 +440,515 @@ td:last-child {
   color: #555;
   padding: 0 0.2rem;
   font-size: 0.75rem;
+}
+
+/* ── Session Tools & Manual Entry ─────────────────────────────── */
+
+.session-tools {
+  background: #181818;
+  border: 1px solid #222;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.session-tools-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.session-tools-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.session-tools-label {
+  font-size: 0.7rem;
+  color: #777;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.paging-label {
+  font-size: 0.7rem;
+  color: #777;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.paging-control {
+  background: #0f0f0f;
+  border: 1px solid #333;
+  border-radius: 6px;
+  color: #ddd;
+  padding: 0.25rem 0.4rem;
+  font-size: 0.75rem;
+  font-family: inherit;
+}
+
+.session-tool-btn {
+  background: #1e1e1e;
+  color: #aaa;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.session-tool-btn:hover {
+  background: #2a2a2a;
+  color: #fff;
+}
+
+.session-tool-btn.ghost {
+  border-color: #292929;
+  color: #888;
+}
+
+.session-tool-btn.danger {
+  border-color: #472020;
+  color: #ffb3b3;
+}
+
+.session-tool-btn.danger:hover {
+  background: #3a1c1c;
+}
+
+.session-tools-status {
+  font-size: 0.7rem;
+  color: #666;
+}
+
+.manual-panel {
+  background: #181818;
+  border: 1px solid #222;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.manual-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #cfcfcf;
+  margin-bottom: 0.75rem;
+}
+
+.manual-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.manual-grid label {
+  font-size: 0.65rem;
+  color: #777;
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.manual-grid input,
+.manual-grid select {
+  width: 100%;
+  background: #0f0f0f;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  color: #ddd;
+  font-size: 0.75rem;
+}
+
+.manual-flag {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.manual-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+  color: #aaa;
+}
+
+.manual-toggle input {
+  accent-color: #4db8ff;
+}
+
+.manual-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #2a2a2a;
+  color: #aaa;
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.manual-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* ── Device Management ────────────────────────────────────────── */
+
+.device-panel {
+  background: #181818;
+  border: 1px solid #222;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.device-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.device-panel-title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #cfcfcf;
+}
+
+.device-panel-subtitle {
+  font-size: 0.7rem;
+  color: #777;
+}
+
+.device-admin {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto auto;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.device-admin-label {
+  font-size: 0.7rem;
+  color: #777;
+}
+
+.device-admin input {
+  background: #101010;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+  color: #ddd;
+  font-size: 0.8rem;
+  width: 100%;
+}
+
+.device-admin-btn {
+  background: #1e1e1e;
+  color: #bbb;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.device-admin-btn:hover {
+  background: #2a2a2a;
+  color: #fff;
+}
+
+.device-admin-btn.ghost {
+  border-color: #292929;
+  color: #888;
+}
+
+.device-admin-status {
+  font-size: 0.7rem;
+  color: #666;
+}
+
+.device-create-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+
+.device-create-grid label {
+  font-size: 0.65rem;
+  color: #777;
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.device-create-grid input,
+.device-create-grid select {
+  width: 100%;
+  background: #0f0f0f;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  color: #ddd;
+  font-size: 0.75rem;
+}
+
+.device-create-grid input[type="color"] {
+  padding: 0.2rem;
+  height: 32px;
+}
+
+.device-create-flag {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.device-create-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+
+.config-grid label {
+  font-size: 0.65rem;
+  color: #777;
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.config-grid input {
+  width: 100%;
+  background: #0f0f0f;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  color: #ddd;
+  font-size: 0.75rem;
+}
+
+.device-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.device-row {
+  background: #181818;
+  border: 1px solid #222;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+
+.device-row-main {
+  display: grid;
+  grid-template-columns: 12px 1fr auto;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.device-color-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.2);
+}
+
+.device-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #e0e0e0;
+}
+
+.device-meta {
+  font-size: 0.7rem;
+  color: #777;
+  margin-top: 0.25rem;
+}
+
+.device-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.device-action-btn {
+  background: #1e1e1e;
+  color: #aaa;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.device-action-btn:hover {
+  background: #2a2a2a;
+  color: #fff;
+}
+
+.device-action-btn.danger {
+  border-color: #472020;
+  color: #ffb3b3;
+}
+
+.device-action-btn.danger:hover {
+  background: #3a1c1c;
+}
+
+.device-edit {
+  display: none;
+  margin-top: 0.75rem;
+  background: #141414;
+  border: 1px solid #222;
+  border-radius: 6px;
+  padding: 0.75rem;
+}
+
+.device-edit.open {
+  display: block;
+}
+
+.device-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.device-edit label {
+  font-size: 0.65rem;
+  color: #777;
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.device-edit input[type="text"],
+.device-edit input[type="color"],
+.device-edit select {
+  width: 100%;
+  background: #0f0f0f;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  color: #ddd;
+  font-size: 0.75rem;
+}
+
+.device-edit input[type="color"] {
+  padding: 0.2rem;
+  height: 32px;
+}
+
+/* ── Modal ────────────────────────────────────────────────────── */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 5;
+}
+
+.modal.open {
+  display: flex;
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 520px;
+  background: #181818;
+  border: 1px solid #222;
+  border-radius: 10px;
+  padding: 1rem;
+}
+
+.modal-title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #cfcfcf;
+  margin-bottom: 0.75rem;
+}
+
+.modal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.modal-grid label {
+  font-size: 0.65rem;
+  color: #777;
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.modal-grid input,
+.modal-grid select {
+  width: 100%;
+  background: #0f0f0f;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  color: #ddd;
+  font-size: 0.75rem;
+}
+
+.modal-flag {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.device-edit-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.device-token {
+  margin-top: 0.6rem;
+  font-size: 0.7rem;
+  color: #9ad1ff;
+  background: #141414;
+  border: 1px solid #223;
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+  word-break: break-all;
 }
 
 /* ── Calendar ──────────────────────────────────────────────────── */

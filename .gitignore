@@ -1,3 +1,19 @@
 # Runtime data files — personal, regenerated automatically
 playtime.txt
 notify.ps1
+
+# Local secrets and dependencies
+.env
+.env.*
+node_modules/
+
+# Client sync state (stored locally in data dir, but keep safe if copied here)
+client.json
+queue.json
+
+# Local databases (if data dir points into repo)
+nte.db
+data/
+
+# Dev data
+dev_data/

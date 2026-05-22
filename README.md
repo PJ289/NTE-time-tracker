@@ -15,6 +15,118 @@ A lightweight, automatic game time tracker for Neverness to Everness (NTE) that 
 
 The tracker polls every 5 seconds to check if `HTGame.exe` is running. When the game starts, it begins timing the session and opens a dashboard at `http://127.0.0.1:27183`. When the game closes, it saves the session data and shows a notification with your playtime statistics. All data is stored locally in JSON format.
 
+## Server Mode (Experimental)
+
+This repo now includes a **server-first** mode that is cross-platform and stores data in **SQLite**. The server can accept uploads from multiple devices (PC + Android) and serves the same dashboard UI.
+
+### Quick Start
+
+1. Install Node.js (same as above).
+2. Install dependencies:
+
+  ```bash
+  npm install
+  ```
+
+3. Start the server:
+
+  ```bash
+  node server.js
+  ```
+
+The dashboard will be available on `http://0.0.0.0:28183` (or the port you set).
+
+### Environment Variables (Server)
+
+Server reads `.env.server` (and falls back to `.env` if present).
+
+- `NTE_PORT` or `PORT`: Server port (default: `27183`)
+- `NTE_HOST`: Bind host (default: `0.0.0.0`)
+- `NTE_DATA_DIR`: Where the SQLite DB is stored
+- `NTE_ADMIN_TOKEN`: Admin token for device/session management (recommended)
+- `NTE_MIN_SESSION_SECONDS`: Minimum session duration (default: `30`)
+- `NTE_MERGE_GAP_SECONDS`: Auto-merge gap in seconds (default: `120`)
+
+### PC Client Sync (Experimental)
+
+You can keep the Windows tracker running locally and sync sessions to the server.
+
+1. Set `NTE_SERVER_URL` in `.env.client`.
+2. Start the tracker normally:
+
+  ```bash
+  node tracker.js
+  ```
+
+On first sync, the PC will **auto-register** as a device and store credentials in:
+
+```
+%LOCALAPPDATA%\nte-tracker\client.json
+```
+
+#### Link PC to Legacy Data
+
+When the server imports legacy JSON, it creates a `PC (Legacy)` device and logs its id:
+
+```
+Legacy device created: <deviceId>
+```
+
+To make the PC client use that legacy device, generate a token for it (admin only):
+
+```bash
+curl -X POST "http://localhost:28183/api/devices/<deviceId>/token" -H "x-admin-token: <ADMIN_TOKEN>"
+```
+
+Then put the returned values in `.env.client`:
+
+```
+NTE_DEVICE_ID=<deviceId>
+NTE_DEVICE_TOKEN=<token>
+```
+
+To force a manual sync at any time:
+
+```bash
+sync.bat
+```
+
+Useful client env variables:
+
+- `NTE_SERVER_URL`: Server base URL (e.g. `http://192.168.1.10:27183`)
+- `NTE_DEVICE_NAME`: Device label (default: `PC`)
+- `NTE_DEVICE_TYPE`: Device type (default: `pc`)
+- `NTE_DEVICE_IS_TEST`: `1` marks the device as test
+- `NTE_DEVICE_AUTO_REGISTER`: `1` to auto-register device
+- `NTE_SYNC_ON_START`: `1` to sync on startup
+- `NTE_SYNC_ON_END`: `1` to sync after each session
+- `NTE_LOCAL_DASHBOARD`: `1` to keep the local dashboard enabled
+
+Client reads `.env.client` (and falls back to `.env` if present).
+
+### Device Management (Server Dashboard)
+
+Open the **Devices** tab and paste the admin token. From there you can:
+
+- Create devices (and generate tokens)
+- Rename/recolor devices, toggle test mode
+- Rotate tokens
+- Delete devices (with reassign or delete sessions)
+
+### Manual Sessions
+
+Use the **Manual Session** panel in the **All Sessions** tab to add sessions for any device. Manual sessions are tagged in the table.
+
+### Legacy JSON Migration
+
+If you have existing data from the local tracker, the server will **auto-import** it once on startup (Windows only) from:
+
+```
+%LOCALAPPDATA%\nte-tracker\data.json
+```
+
+Imported sessions are assigned to a `PC (Legacy)` device.
+
 ## Installation
 
 > New to this kind of thing? No worries — just follow the steps below in order. You do **not** need to know any programming.
@@ -119,6 +231,14 @@ Full path: `C:\Users\<YourUsername>\AppData\Local\nte-tracker\data.json`
 - `totalSeconds`: Your total playtime in seconds
 - `sessions`: Array of all your gaming sessions with timestamps
 - `activeSession`: Present if a session is currently running (interim saves)
+
+### Server Mode Data
+
+When running `server.js`, data is stored in SQLite at:
+
+```
+<NTE_DATA_DIR>\nte.db
+```
 
 ### Initial Offset
 

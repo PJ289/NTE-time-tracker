@@ -8,6 +8,42 @@ const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const os = require('os');
+
+function loadEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  const raw = fs.readFileSync(filePath, 'utf8');
+  const lines = raw.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const idx = trimmed.indexOf('=');
+    if (idx === -1) continue;
+    const key = trimmed.slice(0, idx).trim();
+    let value = trimmed.slice(idx + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (process.env[key] === undefined) process.env[key] = value;
+  }
+}
+
+loadEnvFile(path.join(__dirname, '.env.client'));
+loadEnvFile(path.join(__dirname, '.env'));
+
+function envFlag(name, defaultValue) {
+  if (process.env[name] === undefined) return defaultValue;
+  const value = String(process.env[name]).trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes' || value === 'y';
+}
+
+function normalizeServerUrl(url) {
+  if (!url) return '';
+  return String(url).replace(/\/+$/, '');
+}
+
+const rawQueueLimit = parseInt(process.env.NTE_QUEUE_LIMIT || '500', 10);
+const rawSyncTimeout = parseInt(process.env.NTE_SYNC_TIMEOUT_MS || '8000', 10);
 
 // Configuration
 const CONFIG = {
@@ -20,14 +56,31 @@ const CONFIG = {
   initialOffset: 0,
   maxSessions: 100,
   port: 27183,
+  serverUrl: normalizeServerUrl(process.env.NTE_SERVER_URL),
+  deviceName: process.env.NTE_DEVICE_NAME || (os.hostname() + ' (PC)'),
+  deviceType: process.env.NTE_DEVICE_TYPE || 'pc',
+  deviceIsTest: envFlag('NTE_DEVICE_IS_TEST', false),
+  deviceAutoRegister: envFlag('NTE_DEVICE_AUTO_REGISTER', true),
+  syncOnStart: envFlag('NTE_SYNC_ON_START', true),
+  syncOnEnd: envFlag('NTE_SYNC_ON_END', true),
+  localDashboardEnabled: envFlag('NTE_LOCAL_DASHBOARD', true),
+  syncTimeoutMs: Number.isNaN(rawSyncTimeout) ? 8000 : rawSyncTimeout,
+  queueLimit: Number.isNaN(rawQueueLimit) ? 500 : rawQueueLimit,
   get dataDir() {
-    return path.join(process.env.LOCALAPPDATA, this.appName);
+    if (process.env.LOCALAPPDATA) return path.join(process.env.LOCALAPPDATA, this.appName);
+    return path.join(os.homedir(), '.' + this.appName);
   },
   get dataFile() {
     return path.join(this.dataDir, 'data.json');
   },
   get playtimeFile() {
     return path.join(this.dataDir, 'playtime.txt');
+  },
+  get clientStateFile() {
+    return path.join(this.dataDir, 'client.json');
+  },
+  get queueFile() {
+    return path.join(this.dataDir, 'queue.json');
   }
 };
 
@@ -38,7 +91,12 @@ let tickCount = 0;
 let data = null; // loaded once, kept in memory
 let dashboardOpened = false; // whether browser was opened this tracker run
 let sseClients = []; // active SSE connections
+let clientState = null;
+let uploadQueue = [];
+let syncInProgress = false;
+let syncRequested = false;
 const TICKS_PER_SAVE = CONFIG.interimSaveInterval / CONFIG.pollInterval; // 12 ticks
+const IS_CLIENT_MODE = Boolean(CONFIG.serverUrl);
 
 /**
  * Formats seconds into "Xh Ym" format
@@ -67,6 +125,24 @@ function ensureDataDirectory() {
     fs.mkdirSync(CONFIG.dataDir, { recursive: true });
     log('Created data directory: ' + CONFIG.dataDir);
   }
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function readJsonFile(filePath, fallback) {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    const raw = fs.readFileSync(filePath, 'utf8');
+    return JSON.parse(raw);
+  } catch (err) {
+    return fallback;
+  }
+}
+
+function writeJsonFile(filePath, payload) {
+  fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8');
 }
 
 /**
@@ -134,6 +210,75 @@ function saveData(isActiveSession = false) {
   fs.writeFileSync(CONFIG.dataFile, JSON.stringify(dataToSave, null, 2), 'utf8');
 }
 
+function loadClientState() {
+  ensureDataDirectory();
+  const fallback = {
+    deviceId: null,
+    deviceToken: null,
+    lastServerEndTime: null,
+    lastSyncTime: null
+  };
+  const state = readJsonFile(CONFIG.clientStateFile, fallback) || fallback;
+
+  if (process.env.NTE_DEVICE_ID && String(process.env.NTE_DEVICE_ID).trim()) {
+    state.deviceId = String(process.env.NTE_DEVICE_ID).trim();
+  }
+  if (process.env.NTE_DEVICE_TOKEN && String(process.env.NTE_DEVICE_TOKEN).trim()) {
+    state.deviceToken = String(process.env.NTE_DEVICE_TOKEN).trim();
+  }
+
+  return state;
+}
+
+function saveClientState(state) {
+  ensureDataDirectory();
+  writeJsonFile(CONFIG.clientStateFile, state);
+}
+
+function loadQueue() {
+  ensureDataDirectory();
+  const items = readJsonFile(CONFIG.queueFile, []);
+  return Array.isArray(items) ? items : [];
+}
+
+function saveQueue(queue) {
+  ensureDataDirectory();
+  if (queue.length > CONFIG.queueLimit) {
+    queue = queue.slice(-CONFIG.queueLimit);
+  }
+  writeJsonFile(CONFIG.queueFile, queue);
+  uploadQueue = queue;
+}
+
+function sessionKey(session) {
+  return session.startTime + '|' + session.endTime;
+}
+
+function enqueueSession(session) {
+  if (!session || !session.startTime || !session.endTime) return;
+  const key = sessionKey(session);
+  for (let i = 0; i < uploadQueue.length; i++) {
+    if (sessionKey(uploadQueue[i]) === key) return;
+  }
+  uploadQueue.push({
+    startTime: session.startTime,
+    endTime: session.endTime,
+    duration: session.duration
+  });
+  saveQueue(uploadQueue);
+}
+
+function dedupeSessions(list) {
+  const map = new Map();
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i];
+    if (!item || !item.startTime || !item.endTime) continue;
+    const key = sessionKey(item);
+    if (!map.has(key)) map.set(key, item);
+  }
+  return Array.from(map.values());
+}
+
 /**
  * Checks if the game process is running (async to avoid blocking the event loop)
  */
@@ -150,6 +295,171 @@ function checkProcessRunning(callback) {
       }
     }
   );
+}
+
+async function fetchJson(url, options) {
+  if (typeof fetch !== 'function') {
+    throw new Error('Fetch API not available (requires Node 18+)');
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(function () { controller.abort(); }, CONFIG.syncTimeoutMs);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    const text = await res.text();
+    let json = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch (err) {
+      json = null;
+    }
+    return { ok: res.ok, status: res.status, json: json, text: text };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function ensureDeviceRegistered() {
+  if (!IS_CLIENT_MODE) return false;
+  if (clientState.deviceId && clientState.deviceToken) return true;
+  if (!CONFIG.deviceAutoRegister) {
+    log('Server sync disabled: missing device credentials');
+    return false;
+  }
+
+  const payload = {
+    name: CONFIG.deviceName,
+    type: CONFIG.deviceType,
+    isTest: CONFIG.deviceIsTest
+  };
+
+  const res = await fetchJson(CONFIG.serverUrl + '/api/devices/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok || !res.json || !res.json.deviceId || !res.json.token) {
+    log('Device registration failed (' + res.status + ')');
+    return false;
+  }
+
+  clientState.deviceId = res.json.deviceId;
+  clientState.deviceToken = res.json.token;
+  clientState.lastSyncTime = nowIso();
+  saveClientState(clientState);
+  log('Device registered: ' + clientState.deviceId);
+  return true;
+}
+
+function buildAuthHeaders() {
+  return {
+    'Content-Type': 'application/json',
+    'x-device-id': clientState.deviceId,
+    'x-device-token': clientState.deviceToken
+  };
+}
+
+function getMaxEndTime(sessions, fallback) {
+  let max = null;
+  for (let i = 0; i < sessions.length; i++) {
+    const endTime = new Date(sessions[i].endTime).getTime();
+    if (!isNaN(endTime) && (max === null || endTime > max)) {
+      max = endTime;
+    }
+  }
+  if (max === null) return fallback || null;
+  return new Date(max).toISOString();
+}
+
+function filterSessionsAfter(sessions, lastEndTime) {
+  if (!lastEndTime) return sessions.slice();
+  const last = new Date(lastEndTime).getTime();
+  if (isNaN(last)) return sessions.slice();
+  return sessions.filter(function (s) {
+    const endTime = new Date(s.endTime).getTime();
+    return !isNaN(endTime) && endTime > last;
+  });
+}
+
+async function fetchLastServerEndTime() {
+  const res = await fetchJson(CONFIG.serverUrl + '/api/devices/' + clientState.deviceId + '/last', {
+    method: 'GET',
+    headers: buildAuthHeaders()
+  });
+
+  if (!res.ok || !res.json) {
+    log('Failed to fetch last server timestamp (' + res.status + ')');
+    return null;
+  }
+
+  return res.json.lastEndTime || null;
+}
+
+async function syncWithServer(reason) {
+  if (!IS_CLIENT_MODE) return;
+  if (syncInProgress) {
+    syncRequested = true;
+    return;
+  }
+
+  syncInProgress = true;
+  try {
+    if (!clientState) clientState = loadClientState();
+    if (!uploadQueue || !Array.isArray(uploadQueue)) uploadQueue = loadQueue();
+
+    const ready = await ensureDeviceRegistered();
+    if (!ready) return;
+
+    const lastEndTime = await fetchLastServerEndTime();
+    const localCandidates = filterSessionsAfter(data.sessions || [], lastEndTime);
+    const combined = dedupeSessions(uploadQueue.concat(localCandidates));
+
+    if (!combined.length) {
+      if (lastEndTime) {
+        clientState.lastServerEndTime = lastEndTime;
+        clientState.lastSyncTime = nowIso();
+        saveClientState(clientState);
+      }
+      return;
+    }
+
+    const payload = {
+      deviceId: clientState.deviceId,
+      sessions: combined.map(function (s) {
+        return {
+          startTime: s.startTime,
+          endTime: s.endTime,
+          duration: s.duration
+        };
+      })
+    };
+
+    const res = await fetchJson(CONFIG.serverUrl + '/api/sessions/bulk', {
+      method: 'POST',
+      headers: buildAuthHeaders(),
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      log('Sync failed (' + res.status + ') for ' + combined.length + ' sessions');
+      return;
+    }
+
+    const newLastEnd = getMaxEndTime(combined, lastEndTime);
+    clientState.lastServerEndTime = newLastEnd;
+    clientState.lastSyncTime = nowIso();
+    saveClientState(clientState);
+    saveQueue([]);
+    log('Sync ok (' + reason + '): ' + combined.length + ' sessions');
+  } catch (err) {
+    log('Sync error: ' + err.message);
+  } finally {
+    syncInProgress = false;
+    if (syncRequested) {
+      syncRequested = false;
+      syncWithServer('queued');
+    }
+  }
 }
 
 /**
@@ -195,7 +505,11 @@ function showNotification(sessionSeconds, totalSeconds) {
  */
 function openDashboard() {
   if (dashboardOpened) return;
-  exec('start http://127.0.0.1:' + CONFIG.port, { windowsHide: true, shell: true });
+  var url = null;
+  if (CONFIG.localDashboardEnabled) url = 'http://127.0.0.1:' + CONFIG.port;
+  else if (CONFIG.serverUrl) url = CONFIG.serverUrl;
+  if (!url) return;
+  exec('start ' + url, { windowsHide: true, shell: true });
   dashboardOpened = true;
   log('Opened dashboard in browser');
 }
@@ -404,6 +718,10 @@ function generateShareCard() {
  * Starts the local HTTP server for the dashboard
  */
 function startServer() {
+  if (!CONFIG.localDashboardEnabled) {
+    log('Local dashboard disabled');
+    return;
+  }
   var server = http.createServer(function (req, res) {
     // Serve static dashboard files
     if (req.method === 'GET' && req.url in STATIC_FILES) {
@@ -468,12 +786,14 @@ function handleShutdown() {
   if (isGameRunning && sessionStartTime) {
     const sessionDuration = Math.floor((Date.now() - sessionStartTime) / 1000);
     if (sessionDuration >= CONFIG.minSessionDuration) {
-      data.totalSeconds += sessionDuration;
-      data.sessions.push({
+      const session = {
         startTime: new Date(sessionStartTime).toISOString(),
         endTime: new Date().toISOString(),
         duration: sessionDuration
-      });
+      };
+      data.totalSeconds += sessionDuration;
+      data.sessions.push(session);
+      enqueueSession(session);
       log('Saved active session: ' + formatTime(sessionDuration));
     }
   }
@@ -504,12 +824,14 @@ function pollProcess() {
       const sessionDuration = Math.floor((Date.now() - sessionStartTime) / 1000);
 
       if (sessionDuration >= CONFIG.minSessionDuration) {
-        data.totalSeconds += sessionDuration;
-        data.sessions.push({
+        const session = {
           startTime: new Date(sessionStartTime).toISOString(),
           endTime: new Date().toISOString(),
           duration: sessionDuration
-        });
+        };
+        data.totalSeconds += sessionDuration;
+        data.sessions.push(session);
+        enqueueSession(session);
         saveData(false);
 
         log('Game stopped - session: ' + formatTime(sessionDuration) + ', total: ' + formatTime(data.totalSeconds));
@@ -520,6 +842,8 @@ function pollProcess() {
           sessions: data.sessions,
           initialOffset: CONFIG.initialOffset
         });
+
+        if (CONFIG.syncOnEnd) syncWithServer('session-end');
       } else {
         log('Game stopped - session too short (' + sessionDuration + 's), discarded');
         broadcastSSE('session-end', {
@@ -552,9 +876,30 @@ log('Process: ' + CONFIG.processName);
 log('Poll interval: ' + CONFIG.pollInterval + 'ms');
 log('Data file: ' + CONFIG.dataFile);
 
+const args = process.argv.slice(2);
+const syncOnly = args.includes('--sync');
+
 data = loadData();
 log('Current total time: ' + formatTime(data.totalSeconds));
 log('Sessions tracked: ' + data.sessions.length);
+
+if (IS_CLIENT_MODE) {
+  clientState = loadClientState();
+  uploadQueue = loadQueue();
+  if (CONFIG.syncOnStart && !syncOnly) syncWithServer('startup');
+}
+
+if (syncOnly) {
+  if (!IS_CLIENT_MODE) {
+    log('Sync skipped: NTE_SERVER_URL is not set');
+    process.exit(0);
+  } else {
+    syncWithServer('manual')
+      .then(function () { process.exit(0); })
+      .catch(function () { process.exit(1); });
+    return;
+  }
+}
 
 writePlaytimeLog();
 log('Playtime log: ' + CONFIG.playtimeFile);
