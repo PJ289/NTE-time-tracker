@@ -2,6 +2,35 @@
 
 A lightweight, automatic game time tracker for Neverness to Everness (NTE) that runs silently in the background and tracks your total playtime.
 
+## Table of Contents
+
+- [What It Does](#what-it-does)
+- [How It Works](#how-it-works)
+- [PC Client (Windows)](#pc-client-windows)
+  - [Prerequisites](#prerequisites)
+  - [Installation](#installation)
+  - [Batch scripts (`.bat`)](#batch-scripts-bat)
+  - [Configure `.env.client`](#configure-envclient)
+  - [Verify the installation](#verify-the-installation)
+  - [Day-to-day usage](#day-to-day-usage)
+  - [Testing manually](#testing-manually)
+  - [Uninstalling](#uninstalling)
+- [Server Mode](#server-mode)
+  - [Quick start (Node.js)](#quick-start-nodejs)
+  - [Docker](#docker-server)
+  - [Environment variables (server)](#environment-variables-server)
+  - [Device management](#device-management-server-dashboard)
+  - [Legacy JSON migration](#legacy-json-migration)
+- [Android (Tasker)](#android-tasker)
+- [Manual sessions](#manual-sessions)
+- [Data Storage](#data-storage)
+- [Troubleshooting](#troubleshooting)
+- [Technical Details](#technical-details)
+- [File Structure](#file-structure)
+- [License](#license)
+
+---
+
 ## What It Does
 
 - **Automatic tracking**: Monitors the `HTGame.exe` process and automatically tracks how long you play
@@ -10,43 +39,257 @@ A lightweight, automatic game time tracker for Neverness to Everness (NTE) that 
 - **Playtime log**: Generates a human-readable `playtime.txt` with sessions grouped by date
 - **Crash recovery**: Safely handles unexpected shutdowns or crashes without losing your data
 - **Zero maintenance**: Once installed, it runs automatically on login and requires no user interaction
+- **Optional server sync**: Upload sessions to a central server (PC + Android) when `NTE_SERVER_URL` is configured
 
 ## How It Works
 
-The tracker polls every 5 seconds to check if `HTGame.exe` is running. When the game starts, it begins timing the session and opens a dashboard at `http://127.0.0.1:27183`. When the game closes, it saves the session data and shows a notification with your playtime statistics. All data is stored locally in JSON format.
+The tracker polls every 5 seconds to check if `HTGame.exe` is running. When the game starts, it begins timing the session and opens a dashboard at `http://127.0.0.1:27183`. When the game closes, it saves the session data and shows a notification with your playtime statistics.
 
-## Server Mode (Experimental)
+- **Local-only mode** (default): All data stays on your PC in `%LOCALAPPDATA%\nte-tracker\`.
+- **Client + server mode**: If you create `.env.client` with `NTE_SERVER_URL`, the PC still tracks locally but also syncs sessions to your server dashboard.
 
-This repo now includes a **server-first** mode that is cross-platform and stores data in **SQLite**. The server can accept uploads from multiple devices (PC + Android) and serves the same dashboard UI.
+---
 
-### Quick Start
+## PC Client (Windows)
 
-1. Install Node.js (same as above).
-2. Install dependencies:
+> **New to this?** Follow the sections below in order. You do **not** need programming knowledge for a standard install.  
+> **Only syncing with a server?** You still install the client first, then add [`.env.client`](#configure-envclient).
 
-  ```bash
-  npm install
-  ```
+### Prerequisites
 
-3. Start the server:
+#### Install Node.js (one time)
 
-  ```bash
-  node server.js
-  ```
+Node.js runs the tracker in the background.
 
-The dashboard will be available on `http://0.0.0.0:28183` (or the port you set).
+1. Go to [https://nodejs.org](https://nodejs.org).
+2. Download the **LTS** version (green button on the left, `.msi` installer).
+3. Run the installer → **Next** through every screen → keep defaults → **Install**.
+4. If Windows asks to allow changes → **Yes** → **Finish**.
+
+**(Optional) Verify:** press `Win + R`, type `cmd`, Enter, then:
+
+```bash
+node --version
+```
+
+You should see something like `v20.11.0`.
+
+### Installation
+
+#### 1. Download the project
+
+1. On GitHub, click the green **`< > Code`** button → **Download ZIP**.
+2. Extract the ZIP to a permanent folder, for example:
+   ```
+   C:\Users\<YourName>\Documents\nte-time-tracker
+   ```
+   Avoid **Desktop** or **Downloads** — Windows may clean those folders and break the scheduled task path.
+
+3. Open the folder. You should see `setup.bat`, `tracker.js`, `launcher.vbs`, and this `README.md`.
+
+#### 2. Run an installer `.bat`
+
+| Script | What it does |
+|--------|----------------|
+| **`setup.bat`** (recommended) | Registers auto-start on login **and** starts the tracker immediately |
+| **`install.bat`** | Registers auto-start only — does **not** start the tracker now |
+
+**How to run (both scripts):**
+
+1. **Right-click** `setup.bat` (or `install.bat`) → **Run as administrator**.
+2. Click **Yes** when Windows asks for permission.
+3. A console window appears briefly — that is normal.
+
+**After `setup.bat`:** your browser should open `http://127.0.0.1:27183`. If not, open that URL manually.
+
+**After `install.bat` only:** start the tracker by double-clicking `launcher.vbs`, or log out and back in.
+
+The tracker is now registered as a Windows scheduled task named `NTETracker` and will start on every login.
+
+#### 3. (Optional) Configure server sync
+
+Only if you run the [server](#server-mode) and want this PC to upload sessions → see [Configure `.env.client`](#configure-envclient).
+
+### Batch scripts (`.bat`)
+
+All `.bat` files live in the **same folder** as `tracker.js` (your extracted project folder).
+
+| File | Admin required? | Purpose |
+|------|-----------------|--------|
+| **`setup.bat`** | Yes | Create scheduled task + launch tracker now |
+| **`install.bat`** | Yes | Create scheduled task only (no launch) |
+| **`uninstall.bat`** | Yes | Remove scheduled task (keeps your playtime data) |
+| **`sync.bat`** | No | Force a one-time sync to the server (needs `.env.client` with `NTE_SERVER_URL`) |
+
+**Typical workflow**
+
+```
+First time on this PC     →  setup.bat (as administrator)
+Want sync without reinstall →  edit .env.client, then sync.bat or restart tracker
+Remove auto-start         →  uninstall.bat (as administrator)
+```
+
+**Manual start without reinstalling:** double-click `launcher.vbs` (runs silently, no console window).
+
+### Configure `.env.client`
+
+#### Do I need this file?
+
+| Goal | Need `.env.client`? |
+|------|---------------------|
+| Track playtime only on this PC | **No** — skip this section |
+| Send sessions to your [server](#server-mode) dashboard | **Yes** |
+
+The tracker reads **`.env.client` first**, then `.env` if present. Variables are loaded from the project folder (next to `setup.bat`), not from `%LOCALAPPDATA%`.
+
+#### Create the file (Windows)
+
+1. Open your project folder in File Explorer (where `setup.bat` is).
+2. Open **Notepad**.
+3. Paste the template below and edit the values (see tables).
+4. **File → Save As**
+   - **File name:** `.env.client` (include the leading dot)
+   - **Save as type:** **All Files (*.*)**
+   - **Location:** the project folder (same folder as `setup.bat`)
+5. Save. If you see `env.client.txt`, the type was wrong — fix the extension.
+6. Restart the tracker: log off/on, or run `setup.bat` again, or end `node.exe` running `tracker.js` in Task Manager and double-click `launcher.vbs`.
+
+#### Minimal template (server sync)
+
+Replace `192.168.1.10` with your server’s LAN IP and match the port from your server `.env` (Docker default is **28183**).
+
+```env
+# Required for server sync
+NTE_SERVER_URL=http://192.168.1.10:28183
+
+# Optional — sensible defaults are applied if omitted
+# NTE_DEVICE_NAME=My Gaming PC
+# NTE_DEVICE_TYPE=pc
+# NTE_DEVICE_AUTO_REGISTER=1
+# NTE_SYNC_ON_START=1
+# NTE_SYNC_ON_END=1
+# NTE_LOCAL_DASHBOARD=1
+```
+
+On first successful sync, credentials are saved automatically to:
+
+```
+%LOCALAPPDATA%\nte-tracker\client.json
+```
+
+You usually **do not** need to edit `client.json` by hand.
+
+#### Link this PC to existing “legacy” data on the server
+
+If the server already imported old local JSON as **PC (Legacy)**, use a fixed device instead of auto-register:
+
+1. Find the legacy device id in server logs: `Legacy device created: <deviceId>`
+2. Create a token (replace placeholders):
+
+   ```bash
+   curl -X POST "http://<server-ip>:28183/api/devices/<deviceId>/token" -H "x-admin-token: <ADMIN_TOKEN>"
+   ```
+
+3. Add to `.env.client`:
+
+   ```env
+   NTE_SERVER_URL=http://192.168.1.10:28183
+   NTE_DEVICE_ID=<deviceId>
+   NTE_DEVICE_TOKEN=<token>
+   NTE_DEVICE_AUTO_REGISTER=0
+   ```
+
+4. Run **`sync.bat`** or restart the tracker.
+
+#### Client environment variables (reference)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `NTE_SERVER_URL` | For sync | *(empty)* | Server base URL, e.g. `http://192.168.1.10:28183` (no trailing slash) |
+| `NTE_DEVICE_NAME` | No | `<hostname> (PC)` | Label shown on the server dashboard |
+| `NTE_DEVICE_TYPE` | No | `pc` | Device type sent to the server |
+| `NTE_DEVICE_ID` | No | *(auto)* | Fixed device id (use with legacy / manual linking) |
+| `NTE_DEVICE_TOKEN` | No | *(auto)* | Device token (pair with `NTE_DEVICE_ID`) |
+| `NTE_DEVICE_IS_TEST` | No | `0` | Set to `1` to mark as test device |
+| `NTE_DEVICE_AUTO_REGISTER` | No | `1` | `1` = register on first sync; `0` = use only `NTE_DEVICE_ID` + token |
+| `NTE_SYNC_ON_START` | No | `1` | Sync when the tracker starts |
+| `NTE_SYNC_ON_END` | No | `1` | Sync after each gaming session |
+| `NTE_LOCAL_DASHBOARD` | No | `1` | `1` = keep local dashboard at `http://127.0.0.1:27183` |
+
+Flags accept `1`, `true`, `yes`, or `y` (case-insensitive).
+
+#### Other configuration (local playtime)
+
+To add playtime from **before** you installed the tracker, edit `initialOffset` in `tracker.js` (seconds). See [Data Storage → Initial Offset](#initial-offset).
+
+### Verify the installation
+
+- Dashboard loads at [http://127.0.0.1:27183](http://127.0.0.1:27183) (zero sessions before first play is normal).
+- **Task Manager** (`Ctrl + Shift + Esc`) → **Details** → look for `node.exe` running `tracker.js`.
+- Launch NTE → **NOW PLAYING** appears on the dashboard → close the game → Windows toast with session time.
+
+If using server sync: open the server dashboard and confirm your PC appears under **Devices** after a session or after running `sync.bat`.
+
+### Day-to-day usage
+
+- Runs silently in the background (no window).
+- Dashboard opens when the game starts; notifications when you close the game.
+- No daily interaction required.
+
+### Testing manually
+
+To see log output when something fails:
+
+1. Open the project folder in File Explorer.
+2. Click the address bar, type `cmd`, Enter.
+3. Run:
+
+   ```bash
+   node tracker.js
+   ```
+
+Start/stop the game and watch the console. Close the window to stop the tracker.
+
+Force server sync from the command line:
+
+```bash
+node tracker.js --sync
+```
+
+(or double-click **`sync.bat`**)
+
+### Uninstalling
+
+1. **Right-click** `uninstall.bat` → **Run as administrator**.
+2. Playtime data in `%LOCALAPPDATA%\nte-tracker\` is **kept** for reinstall.
+
+---
+
+## Server Mode
+
+Cross-platform mode with **SQLite** storage. One server can collect sessions from multiple PCs and Android devices.
+
+### Quick start (Node.js)
+
+```bash
+npm install
+node server.js
+```
+
+Dashboard: `http://0.0.0.0:28183` (or the port you configure).  
+PC clients: set `NTE_SERVER_URL` in [`.env.client`](#configure-envclient) to `http://<server-lan-ip>:<port>`.
 
 ### Docker (Server)
 
-Run the server in a container with SQLite data persisted on the host in `./data/nte.db`.
+Run the server in a container with SQLite data in `./data/nte.db`.
 
-**Requirements:** Docker Engine and the [Compose plugin](https://docs.docker.com/compose/install/linux/) (typical on Linux servers).
+**Requirements:** Docker Engine and the [Compose plugin](https://docs.docker.com/compose/install/linux/).
 
-**Published image:** [`pj289/nte-time-tracker-nte-server:latest`](https://hub.docker.com/r/pj289/nte-time-tracker-nte-server) on Docker Hub. `docker-compose.yml` uses this image by default — no local build required.
+**Published image:** [`pj289/nte-time-tracker-nte-server:latest`](https://hub.docker.com/r/pj289/nte-time-tracker-nte-server) on Docker Hub.
 
 #### Quick start (recommended)
 
-You only need `docker-compose.yml`, `.env.example`, and a `.env` file with your settings:
+You need `docker-compose.yml`, `.env.example`, and a `.env` file:
 
 ```bash
 cp .env.example .env
@@ -56,13 +299,13 @@ docker compose pull
 docker compose up -d
 ```
 
-Open the dashboard at `http://<server-ip>:28183` (or the port in `.env`).
+Open `http://<server-ip>:28183` (or your `NTE_PORT`).
 
-**Configuration is not baked into the image.** Create or edit `.env` before starting (or when changing token/port). You do **not** need `.env` to pull or build the image — only when running the container.
+**Configuration is not baked into the image.** Edit `.env` before start or when changing token/port. You do **not** need `.env` to pull the image — only to run the container.
 
-Put `.env` or `.env.server` in the **same folder as `docker-compose.yml`** (recommended). The server also reads `.env.server` / `.env` from the data directory (e.g. `/opt/nte-time-tracker/.env.server` inside the container at `/data/.env.server`). On startup, check `docker compose logs` for lines starting with `Env:` and `Config:`.
+Place `.env` or `.env.server` in the **same folder as `docker-compose.yml`**. The server also reads `.env.server` / `.env` from the data directory inside the container. Check `docker compose logs` for lines starting with `Env:` and `Config:`.
 
-To change settings later: edit `.env`, then `docker compose up -d` again.
+To change settings: edit `.env`, then `docker compose up -d`.
 
 **Without a `.env` file:**
 
@@ -71,354 +314,208 @@ export NTE_ADMIN_TOKEN="$(openssl rand -hex 32)"
 docker compose up -d
 ```
 
-**Data location:** `./data/nte.db` (created on first run).
+**Data:** `./data/nte.db` (created on first run).
 
-**Custom host path (NAS / Dockage):** change only the left side of the volume mount; the path inside the container stays `/data`:
+**Custom host path:**
 
 ```yaml
 volumes:
   - /opt/nte-time-tracker:/data
 ```
 
-The image entrypoint creates the directory if needed and, when started as root, assigns ownership to the `node` user (UID 1000) so SQLite can write `nte.db`. You do not need to `chown` the folder manually in most setups. If your filesystem blocks `chown` on bind mounts, set host ownership to UID/GID `1000` instead.
+The entrypoint creates the directory and sets ownership for the `node` user (UID 1000) when possible.
 
-**Logs:** `docker compose logs -f`
-
-**Update to a newer published image:** `docker compose pull && docker compose up -d`
-
-PC and Android clients should set `NTE_SERVER_URL` to `http://<host-ip>:28183` on your LAN.
+**Logs:** `docker compose logs -f`  
+**Update image:** `docker compose pull && docker compose up -d`
 
 #### Build from source (developers)
-
-If you are hacking on the server code, build locally instead of pulling:
 
 ```bash
 docker compose up --build -d
 ```
 
-Compose builds from the `Dockerfile` and tags the result as `pj289/nte-time-tracker-nte-server:latest`.
-
 #### Publish a new image (maintainers)
-
-After building locally, tag the Compose image name and push (Docker Hub will not find a tag until you do this):
 
 ```bash
 docker tag nte-time-tracker-nte-server:latest pj289/nte-time-tracker-nte-server:latest
 docker push pj289/nte-time-tracker-nte-server:latest
 ```
 
-### Environment Variables (Server)
+### Environment variables (server)
 
-Server reads `.env.server` (and falls back to `.env` if present).
+Server reads `.env.server` (and falls back to `.env`).
 
-- `NTE_PORT` or `PORT`: Server port (default: `27183`)
-- `NTE_HOST`: Bind host (default: `0.0.0.0`)
-- `NTE_DATA_DIR`: Where the SQLite DB is stored
-- `NTE_ADMIN_TOKEN`: Admin token for device/session management (recommended)
-- `NTE_MIN_SESSION_SECONDS`: Minimum session duration (default: `30`)
-- `NTE_MERGE_GAP_SECONDS`: Auto-merge gap in seconds (default: `120`)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NTE_PORT` / `PORT` | `27183` (Node) / `28183` (Compose) | HTTP port |
+| `NTE_HOST` | `0.0.0.0` | Bind address |
+| `NTE_DATA_DIR` | *(platform)* | SQLite directory |
+| `NTE_ADMIN_TOKEN` | — | Admin token (recommended) |
+| `NTE_MIN_SESSION_SECONDS` | `30` | Minimum session length |
+| `NTE_MERGE_GAP_SECONDS` | `120` | Auto-merge gap between sessions |
 
-### PC Client Sync (Experimental)
+### Device management (server dashboard)
 
-You can keep the Windows tracker running locally and sync sessions to the server.
+Open the **Devices** tab and paste the admin token. You can:
 
-1. Set `NTE_SERVER_URL` in `.env.client`.
-2. Start the tracker normally:
-
-  ```bash
-  node tracker.js
-  ```
-
-On first sync, the PC will **auto-register** as a device and store credentials in:
-
-```
-%LOCALAPPDATA%\nte-tracker\client.json
-```
-
-#### Link PC to Legacy Data
-
-When the server imports legacy JSON, it creates a `PC (Legacy)` device and logs its id:
-
-```
-Legacy device created: <deviceId>
-```
-
-To make the PC client use that legacy device, generate a token for it (admin only):
-
-```bash
-curl -X POST "http://localhost:28183/api/devices/<deviceId>/token" -H "x-admin-token: <ADMIN_TOKEN>"
-```
-
-Then put the returned values in `.env.client`:
-
-```
-NTE_DEVICE_ID=<deviceId>
-NTE_DEVICE_TOKEN=<token>
-```
-
-To force a manual sync at any time:
-
-```bash
-sync.bat
-```
-
-Useful client env variables:
-
-- `NTE_SERVER_URL`: Server base URL (e.g. `http://192.168.1.10:27183`)
-- `NTE_DEVICE_NAME`: Device label (default: `PC`)
-- `NTE_DEVICE_TYPE`: Device type (default: `pc`)
-- `NTE_DEVICE_IS_TEST`: `1` marks the device as test
-- `NTE_DEVICE_AUTO_REGISTER`: `1` to auto-register device
-- `NTE_SYNC_ON_START`: `1` to sync on startup
-- `NTE_SYNC_ON_END`: `1` to sync after each session
-- `NTE_LOCAL_DASHBOARD`: `1` to keep the local dashboard enabled
-
-Client reads `.env.client` (and falls back to `.env` if present).
-
-### Device Management (Server Dashboard)
-
-Open the **Devices** tab and paste the admin token. From there you can:
-
-- Create devices (and generate tokens)
+- Create devices and generate tokens
 - Rename/recolor devices, toggle test mode
 - Rotate tokens
-- Delete devices (with reassign or delete sessions)
+- Delete devices (reassign or delete sessions)
 
-### Tasker (Android)
+### Legacy JSON migration
 
-See [TASKER_SETUP.md](TASKER_SETUP.md) for a step-by-step manual setup guide.
-
-### Manual Sessions
-
-Use the **Manual Session** panel in the **All Sessions** tab to add sessions for any device. Manual sessions are tagged in the table.
-
-### Legacy JSON Migration
-
-If you have existing data from the local tracker, the server will **auto-import** it once on startup (Windows only) from:
+On first startup (Windows server host only), the server **auto-imports** once from:
 
 ```
 %LOCALAPPDATA%\nte-tracker\data.json
 ```
 
-Imported sessions are assigned to a `PC (Legacy)` device.
+Imported sessions are assigned to a **PC (Legacy)** device. Link your PC client with [Link this PC to existing “legacy” data](#link-this-pc-to-existing-legacy-data-on-the-server).
 
-## Installation
+---
 
-> New to this kind of thing? No worries — just follow the steps below in order. You do **not** need to know any programming.
+## Android (Tasker)
 
-### Step 1: Install Node.js
+See [TASKER_SETUP.md](TASKER_SETUP.md) for step-by-step Android setup.
 
-Node.js is the engine that runs the tracker in the background. You only have to install it once.
+---
 
-1. Go to [https://nodejs.org](https://nodejs.org).
-2. Click the big green button for the **LTS** version (on the left). A `.msi` file will download.
-3. Open the downloaded file. The installer will launch.
-4. Click **Next** through every screen, accept the license, and keep all the default options. Click **Install** at the end.
-5. Windows will ask *"Do you want to allow this app to make changes to your device?"* — click **Yes**.
-6. When it says "Installation complete," click **Finish**. You're done — you don't need to open Node.js yourself; the tracker will use it automatically.
+## Manual sessions
 
-**(Optional) Check it worked:** press `Win + R`, type `cmd`, and press Enter. In the black window that opens, type:
+Use the **Manual Session** panel in the **All Sessions** tab on the server dashboard. Manual sessions are tagged in the table.
 
-```bash
-node --version
-```
-
-If you see something like `v20.11.0`, Node.js is installed correctly.
-
-### Step 2: Download the tracker
-
-1. Go to this project's GitHub page (the page where you're reading this README).
-2. Click the green **`< > Code`** button near the top.
-3. In the menu that opens, click **Download ZIP**. A ZIP file will download (usually to your `Downloads` folder).
-4. Open your `Downloads` folder and find the ZIP (something like `nte-tracker-main.zip`).
-5. **Right-click** the ZIP → **Extract All…** → choose a location you'll remember, for example `C:\Users\<YourName>\Documents\nte-tracker`. Avoid putting it on the **Desktop** or leaving it inside **Downloads** — Windows sometimes cleans those folders automatically, which would break the tracker.
-6. After extracting, open the new folder. You should see files like `setup.bat`, `tracker.js`, `launcher.vbs`, and this `README.md`.
-
-### Step 3: Run the installer
-
-1. In the extracted folder, find the file named **`setup.bat`**.
-2. **Right-click** it and choose **Run as administrator**.
-3. Windows will ask *"Do you want to allow this app to make changes to your device?"* — click **Yes**.
-4. A black console window will flash open briefly and then close. That's normal — the installer is quick.
-5. Your browser should automatically open the dashboard at [http://127.0.0.1:27183](http://127.0.0.1:27183). If it doesn't, open that link yourself in any browser.
-
-That's it — the tracker is now installed and will start automatically every time you log in to Windows. You never have to touch it again.
-
-> **Alternative:** if you'd rather not auto-start the tracker right now, run `install.bat` instead (same installation, no immediate launch). You can then start it manually any time by double-clicking `launcher.vbs`.
-
-### Step 4: Verify it's working
-
-- The dashboard at [http://127.0.0.1:27183](http://127.0.0.1:27183) should load. Before you've played, it will show zero sessions — that's fine.
-- Open **Task Manager** (press `Ctrl + Shift + Esc`) → go to the **Details** tab → scroll down and look for `node.exe`. If it's there, the tracker is running.
-- Launch Neverness to Everness. Within a few seconds, a **NOW PLAYING** banner appears on the dashboard and the timer starts ticking. When you close the game, a Windows notification pops up with your session time.
-
-### (Optional) Editing configuration
-
-If you want to adjust settings later (for example, setting an `initialOffset` for playtime you had before installing the tracker), open `tracker.js` in any text editor — **Notepad** works fine. If you'd like a nicer editor, install [Visual Studio Code](https://code.visualstudio.com), open it, and use **File → Open Folder…** to open the `nte-tracker` folder. See the [Configuration](#configuration) section below for what each setting does.
-
-### Testing Manually
-
-If something doesn't seem to work and you want to see what's happening, you can run the tracker by hand in a terminal with log output:
-
-1. Open the extracted project folder in File Explorer.
-2. Click the address bar at the top, type `cmd`, and press Enter — this opens a terminal already pointed at the folder.
-3. Type the following and press Enter:
-
-   ```bash
-   node tracker.js
-   ```
-
-The tracker will run in that terminal and print log messages. Start and stop the game to verify it's detecting the process correctly. Close the terminal window to stop it.
-
-### Uninstalling
-
-Right-click `uninstall.bat` and **Run as administrator** to remove the automatic startup task. Your playtime data in `%LOCALAPPDATA%\nte-tracker\` is preserved in case you want to reinstall later.
-
-## Usage
-
-- **Background operation**: The tracker runs silently with no visible window
-- **Live dashboard**: When the game starts, a dashboard opens at `http://127.0.0.1:27183` with real-time session info — the timer ticks live every second, no page refreshes needed
-- **Automatic notifications**: When you close the game, a Windows toast notification appears showing:
-  - Session time (how long you played this session)
-  - Total time (your cumulative playtime)
-- **No interaction needed**: Everything happens automatically
+---
 
 ## Data Storage
 
-### Location
-
-All data is stored at:
-```
-%LOCALAPPDATA%\nte-tracker\data.json
-```
-
-Full path: `C:\Users\<YourUsername>\AppData\Local\nte-tracker\data.json`
-
-### Checking Your Playtime
-
-**Option 1**: Open `http://127.0.0.1:27183` in your browser (while the tracker is running) for the full dashboard
-
-**Option 2**: Check `playtime.txt` in the project folder — a human-readable log grouped by date
-
-**Option 3**: Look at the notification when you close the game
-
-**Option 4**: Open `data.json` in a text editor to see:
-- `totalSeconds`: Your total playtime in seconds
-- `sessions`: Array of all your gaming sessions with timestamps
-- `activeSession`: Present if a session is currently running (interim saves)
-
-### Server Mode Data
-
-When running `server.js`, data is stored in SQLite at:
+### PC client (local)
 
 ```
-<NTE_DATA_DIR>\nte.db
+%LOCALAPPDATA%\nte-tracker\
+├── data.json      # Sessions and total playtime
+├── client.json    # Server device credentials (if sync enabled)
+├── queue.json     # Pending uploads (if sync enabled)
+└── playtime.txt   # Human-readable log (also in project folder when tracker runs)
 ```
 
-### Initial Offset
+Example full path: `C:\Users\<You>\AppData\Local\nte-tracker\data.json`
 
-You can set an `initialOffset` (in seconds) in `tracker.js` if you want to account for playtime before the tracker was installed. Default is `0`.
+**Ways to check playtime**
+
+1. Local dashboard: `http://127.0.0.1:27183` (while tracker is running)
+2. `playtime.txt` in the project folder
+3. Windows notification when closing the game
+4. Open `data.json` → `totalSeconds` and `sessions`
+
+### Server (SQLite)
+
+```
+<NTE_DATA_DIR>/nte.db
+```
+
+### Initial offset
+
+Set `initialOffset` (seconds) in `tracker.js` for playtime before installing the tracker. Default: `0`.
+
+---
 
 ## Troubleshooting
 
-### How to check if the tracker is running
+### Is the tracker running?
 
-1. Open Task Manager (Ctrl + Shift + Esc)
-2. Go to the **Details** tab
-3. Look for `node.exe` with command line containing `tracker.js`
+**Task Manager** → **Details** → `node.exe` with `tracker.js` in the command line.
 
-Alternatively, check if the scheduled task exists:
+Or:
+
 ```bash
 schtasks /query /tn "NTETracker"
 ```
 
-### Dashboard doesn't load
+### Dashboard does not load
 
-- Make sure the tracker is running (see above)
-- Try opening `http://127.0.0.1:27183` manually in your browser
-- If the port is in use, the tracker will try the next port — check the log output for the actual URL
+- Confirm the tracker is running (above).
+- Open [http://127.0.0.1:27183](http://127.0.0.1:27183) manually.
+- If the port is busy, the tracker may use the next port — check output from `node tracker.js`.
 
-### Notifications don't appear
+### Notifications do not appear
 
-- Ensure Windows notifications are enabled for your system
-- Check that Focus Assist is not blocking notifications
-- Verify the tracker is running (see above)
-- Test by manually running `node tracker.js` and starting/stopping the game
+- Enable Windows notifications; disable Focus Assist blocking them.
+- Test with `node tracker.js` and start/stop the game.
 
-### Manually checking playtime
+### Server sync does not work
 
-Open the data file at `%LOCALAPPDATA%\nte-tracker\data.json` and look at the `totalSeconds` field. Divide by 3600 to convert to hours.
+- Confirm `.env.client` is in the **project folder** (next to `tracker.js`), not in AppData.
+- Check `NTE_SERVER_URL` (correct IP, port, no trailing slash).
+- Run `sync.bat` or `node tracker.js --sync` and read console errors.
+- On the server: verify firewall allows the port; check `docker compose logs`.
 
-### Resetting or adjusting playtime
+### Game not detected
 
-1. Stop the tracker if it's running (close the node.exe process)
-2. Edit `data.json` and modify the `totalSeconds` value
-3. Restart the tracker
+- Process must be `HTGame.exe`.
+- Node.js must be on PATH.
+- Run `node tracker.js` and watch logs.
 
-### The tracker isn't detecting the game
+### Reset or adjust playtime
 
-- Verify the game executable is named `HTGame.exe` (this is the actual NTE game process)
-- Ensure Node.js is installed and in your system PATH
-- Check the tracker logs if running manually with `node tracker.js`
+1. Stop the tracker (`node.exe` or uninstall scheduled task temporarily).
+2. Edit `%LOCALAPPDATA%\nte-tracker\data.json` → `totalSeconds`.
+3. Start again via `launcher.vbs` or login.
+
+---
 
 ## Technical Details
 
 ### Dependencies
 
-**Zero external dependencies** - uses only built-in Node.js modules:
-- `child_process`: Process monitoring via Windows `tasklist`
-- `fs`: File system operations for data persistence
-- `path`: Path handling
-- `http`: Local dashboard server
+**No npm packages** for the PC client — built-in Node.js modules only (`child_process`, `fs`, `path`, `http`).
 
-### Resource Usage
+### Resource usage (PC client)
 
-- **Memory**: ~35MB RAM (minimal footprint)
-- **CPU**: Negligible (polls every 5 seconds)
-- **Disk**: <1MB (data file is typically a few KB)
-- **Network**: Local only — the HTTP server binds to `127.0.0.1` and is not accessible from other machines
+- **Memory:** ~35 MB
+- **CPU:** Negligible (5 s poll interval)
+- **Disk:** &lt;1 MB typical
+- **Network:** Local dashboard on `127.0.0.1` only; optional outbound sync if `NTE_SERVER_URL` is set
 
 ### Features
 
-- **Live dashboard**: Real-time updates via Server-Sent Events (no page reloads)
-- **Interim saves**: Every 60 seconds while playing (prevents data loss)
-- **Crash recovery**: Automatically finalizes incomplete sessions on next startup
-- **Session history**: Maintains last 100 sessions with timestamps
-- **Silent operation**: No console window or UI (uses VBScript launcher)
-- **Clean shutdown handling**: Properly saves data on system shutdown/restart
+- Live dashboard (Server-Sent Events)
+- Interim saves every 60 s while playing
+- Crash recovery on next startup
+- Last 100 sessions in local JSON
+- Silent launch via `launcher.vbs`
 
-### Configuration
+### Default settings (`tracker.js`)
 
-Default settings (in `tracker.js`):
-- Process name: `HTGame.exe`
-- Poll interval: 5 seconds
-- Interim save: Every 60 seconds
-- Initial offset: 0 (configurable)
-- Max sessions: 100
-- Dashboard port: 27183
+| Setting | Value |
+|---------|--------|
+| Process | `HTGame.exe` |
+| Poll interval | 5 s |
+| Interim save | 60 s |
+| Min session | 30 s |
+| Dashboard port | 27183 |
+
+---
 
 ## File Structure
 
 ```
-nte-tracker/
-├── tracker.js       # Main tracker script (includes HTTP server)
-├── dashboard.html   # Dashboard page structure
-├── dashboard.css    # Dashboard styles
-├── dashboard.js     # Dashboard client-side logic
-├── launcher.vbs     # Silent launcher (no console window)
-├── setup.bat        # Installation + auto-launch (recommended)
-├── install.bat      # Installation only (alternative)
-├── uninstall.bat    # Uninstallation script
-└── README.md        # This file
+nte-time-tracker/
+├── tracker.js          # PC client (tracking + optional sync)
+├── server.js           # Central server (optional)
+├── dashboard.html/css/js
+├── launcher.vbs        # Silent start (no console)
+├── setup.bat           # Install + start now
+├── install.bat         # Install only
+├── uninstall.bat       # Remove scheduled task
+├── sync.bat            # Force server sync
+├── .env.client         # PC client config (you create this)
+├── .env.example        # Docker / server example
+├── docker-compose.yml
+└── README.md
 ```
 
-Data directory:
-
-```
-%LOCALAPPDATA%\nte-tracker/
-├── data.json        # Playtime data and session history
-└── playtime.txt     # Auto-generated human-readable playtime log
-```
+---
 
 ## License
 
