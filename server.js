@@ -8,9 +8,15 @@ const crypto = require("crypto");
 const Database = require("better-sqlite3");
 
 function loadEnvFile(filePath) {
-  if (!fs.existsSync(filePath)) return;
+  if (!fs.existsSync(filePath)) return 0;
+  try {
+    fs.accessSync(filePath, fs.constants.R_OK);
+  } catch (err) {
+    throw new Error("not readable (" + err.message + ")");
+  }
   const raw = fs.readFileSync(filePath, "utf8");
   const lines = raw.split(/\r?\n/);
+  let loaded = 0;
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
@@ -21,12 +27,70 @@ function loadEnvFile(filePath) {
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1);
     }
-    if (process.env[key] === undefined) process.env[key] = value;
+    const existing = process.env[key];
+    if (typeof existing === "string" && existing.length > 0) continue;
+    process.env[key] = value;
+    loaded += 1;
+  }
+  return loaded;
+}
+
+function getDataDir() {
+  if (process.env.NTE_DATA_DIR) return process.env.NTE_DATA_DIR;
+  if (process.env.LOCALAPPDATA) return path.join(process.env.LOCALAPPDATA, "nte-tracker");
+  return path.join(os.homedir(), ".nte-tracker");
+}
+
+function log(msg) {
+  const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19);
+  console.log("[" + timestamp + "] " + msg);
+}
+
+function tryLoadEnvFile(filePath, label) {
+  if (!fs.existsSync(filePath)) {
+    log("Env: " + label + " not found (" + filePath + ")");
+    return false;
+  }
+  try {
+    const count = loadEnvFile(filePath);
+    log("Env: loaded " + label + " (" + filePath + ", " + count + " variable(s))");
+    return true;
+  } catch (err) {
+    log("Env: " + label + " failed (" + filePath + "): " + err.message);
+    return false;
   }
 }
 
-loadEnvFile(path.join(__dirname, ".env.server"));
-loadEnvFile(path.join(__dirname, ".env"));
+function bootstrapEnvFiles() {
+  const appDir = __dirname;
+  const dataDir = getDataDir();
+  const candidates = [
+    { filePath: path.join(appDir, ".env.server"), label: ".env.server (app dir)" },
+    { filePath: path.join(appDir, ".env"), label: ".env (app dir)" },
+    { filePath: path.join(dataDir, ".env.server"), label: ".env.server (data dir)" },
+    { filePath: path.join(dataDir, ".env"), label: ".env (data dir)" }
+  ];
+  let anyLoaded = false;
+  for (const item of candidates) {
+    if (tryLoadEnvFile(item.filePath, item.label)) anyLoaded = true;
+  }
+  if (!anyLoaded) {
+    log("Env: no .env / .env.server file loaded (using process environment only)");
+  }
+}
+
+function logConfigStatus() {
+  const token = CONFIG.adminToken;
+  if (token) {
+    log("Config: NTE_ADMIN_TOKEN is set (" + token.length + " characters)");
+  } else {
+    log("Config: NTE_ADMIN_TOKEN is NOT set — admin actions in the dashboard will fail");
+    log("Config: set NTE_ADMIN_TOKEN in .env next to docker-compose.yml, or in " + DATA_DIR + "/.env.server");
+  }
+  log("Config: listening on " + CONFIG.host + ":" + CONFIG.port);
+}
+
+bootstrapEnvFiles();
 
 function parseBool(value) {
   if (typeof value === "boolean") return value;
@@ -61,21 +125,10 @@ const DB_FILE = path.join(DATA_DIR, "nte.db");
 let sseClients = [];
 let configOverrides = null;
 
-function log(msg) {
-  const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19);
-  console.log("[" + timestamp + "] " + msg);
-}
-
 function logRequest(req, status, message) {
   const prefix = req.method + " " + req.url;
   if (message) log(prefix + " -> " + status + " (" + message + ")");
   else log(prefix + " -> " + status);
-}
-
-function getDataDir() {
-  if (process.env.NTE_DATA_DIR) return process.env.NTE_DATA_DIR;
-  if (process.env.LOCALAPPDATA) return path.join(process.env.LOCALAPPDATA, "nte-tracker");
-  return path.join(os.homedir(), ".nte-tracker");
 }
 
 function ensureDir(dirPath) {
@@ -123,7 +176,21 @@ function pickDeviceColor(db) {
 
 function initDb() {
   ensureDir(DATA_DIR);
-  const db = new Database(DB_FILE);
+  let db;
+  try {
+    db = new Database(DB_FILE);
+  } catch (err) {
+    if (err && err.code === "SQLITE_CANTOPEN") {
+      log(
+        "Cannot open SQLite database at " +
+          DB_FILE +
+          ". Ensure " +
+          DATA_DIR +
+          " exists and is writable by the container user (UID 1000 / node)."
+      );
+    }
+    throw err;
+  }
   db.pragma("journal_mode = WAL");
   db.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
 
@@ -404,12 +471,21 @@ function sendJson(res, status, data) {
 
 function authenticate(db, req) {
   const adminToken = req.headers["x-admin-token"];
-  if (CONFIG.adminToken && adminToken === CONFIG.adminToken) {
+  if (adminToken) {
+    if (!CONFIG.adminToken) {
+      logRequest(req, 503, "admin token not configured on server");
+      return {
+        ok: false,
+        status: 503,
+        error: "Admin token not configured on server (set NTE_ADMIN_TOKEN and restart)"
+      };
+    }
+    if (adminToken !== CONFIG.adminToken) {
+      logRequest(req, 401, "admin auth failed");
+      return { ok: false, status: 401, error: "Invalid admin token" };
+    }
     logRequest(req, 200, "admin auth");
     return { ok: true, isAdmin: true, deviceId: null };
-  }
-  if (adminToken && CONFIG.adminToken) {
-    logRequest(req, 401, "admin auth failed");
   }
 
   const deviceId = req.headers["x-device-id"];
@@ -1153,6 +1229,7 @@ function startServer(db) {
     log("Server listening on http://" + CONFIG.host + ":" + CONFIG.port);
     log("Data dir: " + DATA_DIR);
     log("Database: " + DB_FILE);
+    logConfigStatus();
   });
 
   server.on("error", (err) => {

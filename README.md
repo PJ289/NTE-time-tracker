@@ -60,6 +60,8 @@ Open the dashboard at `http://<server-ip>:28183` (or the port in `.env`).
 
 **Configuration is not baked into the image.** Create or edit `.env` before starting (or when changing token/port). You do **not** need `.env` to pull or build the image — only when running the container.
 
+Put `.env` or `.env.server` in the **same folder as `docker-compose.yml`** (recommended). The server also reads `.env.server` / `.env` from the data directory (e.g. `/opt/nte-time-tracker/.env.server` inside the container at `/data/.env.server`). On startup, check `docker compose logs` for lines starting with `Env:` and `Config:`.
+
 To change settings later: edit `.env`, then `docker compose up -d` again.
 
 **Without a `.env` file:**
@@ -70,6 +72,15 @@ docker compose up -d
 ```
 
 **Data location:** `./data/nte.db` (created on first run).
+
+**Custom host path (NAS / Dockage):** change only the left side of the volume mount; the path inside the container stays `/data`:
+
+```yaml
+volumes:
+  - /opt/nte-time-tracker:/data
+```
+
+The image entrypoint creates the directory if needed and, when started as root, assigns ownership to the `node` user (UID 1000) so SQLite can write `nte.db`. You do not need to `chown` the folder manually in most setups. If your filesystem blocks `chown` on bind mounts, set host ownership to UID/GID `1000` instead.
 
 **Logs:** `docker compose logs -f`
 
