@@ -344,6 +344,42 @@ td.device-cell {
   font-weight: 500;
 }
 
+.session-select-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.28rem 0.55rem;
+  margin-right: 0.5rem;
+  border-radius: 999px;
+  border: 1px solid #343434;
+  background: linear-gradient(180deg, #1b1b1b 0%, #111 100%);
+  color: #a7a7a7;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  user-select: none;
+}
+
+.session-select-toggle:hover {
+  border-color: #4db8ff;
+  color: #d6ebff;
+}
+
+.session-select-toggle.selected {
+  border-color: #4db8ff;
+  color: #e8f6ff;
+  box-shadow: inset 0 0 0 1px rgba(77, 184, 255, 0.18);
+}
+
+.session-select-toggle input[type="checkbox"] {
+  width: 0.95rem;
+  height: 0.95rem;
+  margin: 0;
+  accent-color: #4db8ff;
+  cursor: pointer;
+}
+
 .device-tag {
   display: inline-flex;
   align-items: center;
@@ -949,6 +985,195 @@ td.device-cell {
   border-radius: 6px;
   padding: 0.5rem 0.6rem;
   word-break: break-all;
+}
+
+@media (max-width: 640px) {
+  body {
+    padding: 0.85rem;
+  }
+
+  .container {
+    max-width: 100%;
+  }
+
+  h1 {
+    font-size: 1.1rem;
+  }
+
+  .total-time {
+    font-size: 2.4rem;
+  }
+
+  .total-time .unit {
+    font-size: 1rem;
+  }
+
+  .filter-bar {
+    width: 100%;
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+
+  .tab-bar {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .tab-bar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tab-btn {
+    padding: 0.6rem 0.85rem;
+    white-space: nowrap;
+    flex: 0 0 auto;
+  }
+
+  .session-tools-row,
+  .device-panel-header,
+  .device-create-actions,
+  .modal-actions,
+  .device-edit-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .device-admin,
+  .modal-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .session-tools-group {
+    width: 100%;
+  }
+
+  .session-tools-group:last-child {
+    justify-content: space-between;
+  }
+
+  .paging-control {
+    min-width: 4.2rem;
+  }
+
+  .day-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.35rem;
+  }
+
+  .day-stats {
+    font-size: 0.72rem;
+    line-height: 1.35;
+  }
+
+  .day-scroll {
+    max-height: none;
+  }
+
+  .day table,
+  .day thead,
+  .day tbody,
+  .day tr,
+  .day td {
+    display: block;
+    width: 100%;
+  }
+
+  .day thead {
+    display: none;
+  }
+
+  .day tr {
+    position: relative;
+    border-top: 1px solid #1a1a1a;
+    padding: 1rem 0.8rem 0.7rem;
+  }
+
+  .day td {
+    border-top: 0;
+    padding: 0.25rem 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.82rem;
+  }
+
+  .day td::before {
+    color: #666;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    flex: 0 0 auto;
+    content: attr(data-label);
+  }
+
+  .day td:not([data-label])::before {
+    content: "";
+  }
+
+  .day td[data-label="Device"] {
+    align-items: flex-start;
+  }
+
+  .day td[data-label="Device"] .device-tag {
+    margin-left: auto;
+    max-width: 72vw;
+  }
+
+  .day td[data-label="Device"] .device-test-badge,
+  .day td[data-label="Device"] .manual-tag {
+    flex: 0 0 auto;
+  }
+
+  .day td[data-label="Actions"] {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .day td[data-label="Actions"]::before {
+    margin-right: 0.25rem;
+  }
+
+  .day td[data-label="Actions"] .session-select-toggle {
+    margin-right: 0.35rem;
+    margin-bottom: 0.35rem;
+  }
+
+  .day td[data-label="Actions"] button {
+    margin-right: 0.35rem;
+  }
+
+  .device-tag {
+    font-size: 0.58rem;
+  }
+
+  .device-panel-title {
+    font-size: 0.8rem;
+  }
+
+  .device-panel-subtitle,
+  .device-admin-label,
+  .device-admin-status,
+  .session-tools-label,
+  .paging-label {
+    font-size: 0.65rem;
+  }
+
+  .device-row-main {
+    grid-template-columns: 12px 1fr;
+  }
+
+  .device-actions {
+    justify-content: flex-start;
+    margin-top: 0.4rem;
+  }
+
+  .device-edit-actions,
+  .modal-actions,
+  .device-create-actions {
+    width: 100%;
+  }
 }
 
 /* ── Calendar ──────────────────────────────────────────────────── */

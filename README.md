@@ -113,6 +113,10 @@ Open the **Devices** tab and paste the admin token. From there you can:
 - Rotate tokens
 - Delete devices (with reassign or delete sessions)
 
+### Tasker (Android)
+
+See [TASKER_SETUP.md](TASKER_SETUP.md) for a step-by-step manual setup guide.
+
 ### Manual Sessions
 
 Use the **Manual Session** panel in the **All Sessions** tab to add sessions for any device. Manual sessions are tagged in the table.

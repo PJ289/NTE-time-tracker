@@ -57,6 +57,12 @@ function createTd(text) {
   return td;
 }
 
+function createLabeledTd(text, label) {
+  var td = createTd(text);
+  if (label) td.setAttribute("data-label", label);
+  return td;
+}
+
 function fillDeviceTypeSelect(selectEl, value) {
   if (!selectEl) return;
   selectEl.textContent = "";
@@ -665,7 +671,7 @@ function buildDayCard(day, collapsible, showActions) {
   var thead = document.createElement("thead");
   var thr = document.createElement("tr");
   var headers = showActions
-    ? ["Select", "Start", "End", "Duration", "Device", "Actions"]
+    ? ["Start", "End", "Duration", "Device", "Actions"]
     : ["Start", "End", "Duration", "Device"];
   headers.forEach(function(t) {
     var col = document.createElement("th");
@@ -679,28 +685,12 @@ function buildDayCard(day, collapsible, showActions) {
   for (var j = 0; j < day.sessions.length; j++) {
     var sess = day.sessions[j];
     var tr = document.createElement("tr");
-    if (showActions) {
-      var selectTd = document.createElement("td");
-      var checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.disabled = !sess.id;
-      checkbox.checked = !!selectedSessionIds[sess.id];
-      checkbox.onchange = function (id, cb) {
-        return function () {
-          if (!id) return;
-          if (cb.checked) selectedSessionIds[id] = true;
-          else delete selectedSessionIds[id];
-          updateCombineButtonState();
-        };
-      }(sess.id, checkbox);
-      selectTd.appendChild(checkbox);
-      tr.appendChild(selectTd);
-    }
 
-    tr.appendChild(createTd(fmtTime(sess.startTime)));
-    tr.appendChild(createTd(fmtTime(sess.endTime)));
-    tr.appendChild(createTd(fmt(sess.duration)));
+    tr.appendChild(createLabeledTd(fmtTime(sess.startTime), "Start"));
+    tr.appendChild(createLabeledTd(fmtTime(sess.endTime), "End"));
+    tr.appendChild(createLabeledTd(fmt(sess.duration), "Duration"));
     var deviceTd = createEl("td", "device-cell");
+    deviceTd.setAttribute("data-label", "Device");
     var deviceInfo = resolveDevice(sess);
     deviceTd.appendChild(createDeviceTag(deviceInfo));
     if (deviceInfo && deviceInfo.isTest) {
@@ -716,6 +706,28 @@ function buildDayCard(day, collapsible, showActions) {
     tr.appendChild(deviceTd);
     if (showActions) {
       var actionsTd = document.createElement("td");
+      actionsTd.setAttribute("data-label", "Actions");
+      var selectWrap = createEl("label", "session-select-toggle");
+      var checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.disabled = !sess.id;
+      checkbox.checked = !!selectedSessionIds[sess.id];
+      checkbox.onchange = function (id, cb, label) {
+        return function () {
+          if (!id) return;
+          if (cb.checked) selectedSessionIds[id] = true;
+          else delete selectedSessionIds[id];
+          label.classList.toggle("selected", cb.checked);
+          updateCombineButtonState();
+        };
+      }(sess.id, checkbox, selectWrap);
+      if (checkbox.checked) selectWrap.classList.add("selected");
+      var selectText = document.createElement("span");
+      selectText.textContent = "Select";
+      selectWrap.appendChild(checkbox);
+      selectWrap.appendChild(selectText);
+      actionsTd.appendChild(selectWrap);
+
       var editBtn = createEl("button", "session-tool-btn");
       editBtn.textContent = "Edit";
       editBtn.disabled = !adminToken || !sess.id;

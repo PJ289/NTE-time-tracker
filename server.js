@@ -381,6 +381,22 @@ function readJson(req, res) {
   });
 }
 
+function readText(req, res) {
+  return new Promise((resolve) => {
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > CONFIG.maxBodyBytes) {
+        res.writeHead(413, { "Content-Type": "text/plain" });
+        res.end("Payload too large");
+        req.destroy();
+        resolve(null);
+      }
+    });
+    req.on("end", () => resolve(body));
+  });
+}
+
 function sendJson(res, status, data) {
   res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-cache" });
   res.end(JSON.stringify(data));
@@ -568,6 +584,7 @@ const STATIC_FILES = (function loadStaticFiles() {
     "/": { path: "dashboard.html", type: "text/html; charset=utf-8", encoding: "utf8" },
     "/dashboard.css": { path: "dashboard.css", type: "text/css; charset=utf-8", encoding: "utf8" },
     "/dashboard.js": { path: "dashboard.js", type: "application/javascript; charset=utf-8", encoding: "utf8" },
+    "/favicon.ico": { path: "favicon.ico", type: "image/x-icon", encoding: null, cache: "public, max-age=86400" },
     "/bg.png": { path: "bg.png", type: "image/png", encoding: null, cache: "public, max-age=86400" }
   };
   const cache = {};
@@ -869,6 +886,57 @@ function startServer(db) {
         sendJson(res, 200, result);
         if (result.inserted > 0 || result.merged > 0) broadcastDataUpdate(db);
         logRequest(req, 200, "bulk sessions device=" + deviceId + " inserted=" + result.inserted + " merged=" + result.merged + " skipped=" + result.skipped);
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/sessions/queue") {
+        const body = await readText(req, res);
+        if (body === null) return;
+
+        const deviceId = auth.deviceId;
+        const lastRow = db.prepare(
+          "SELECT end_time AS endTime FROM sessions WHERE device_id = ? ORDER BY end_time DESC LIMIT 1"
+        ).get(deviceId);
+        const lastMs = lastRow && lastRow.endTime ? new Date(lastRow.endTime).getTime() : 0;
+
+        const lines = body.split(/\r?\n/);
+        let inserted = 0;
+        let merged = 0;
+        let skipped = 0;
+        let filtered = 0;
+
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (!line) continue;
+          const parts = line.split(",");
+          if (parts.length < 2) {
+            skipped++;
+            continue;
+          }
+          const startMs = parseInt(parts[0], 10);
+          const endMs = parseInt(parts[1], 10);
+          if (!startMs || !endMs) {
+            skipped++;
+            continue;
+          }
+          if (lastMs && endMs <= lastMs) {
+            filtered++;
+            continue;
+          }
+          const normalized = normalizeIncomingSession({ startTime: startMs, endTime: endMs });
+          if (!normalized) {
+            skipped++;
+            continue;
+          }
+          const result = insertSessionWithMerge(db, deviceId, normalized, false);
+          inserted += result.inserted;
+          merged += result.merged;
+          skipped += result.skipped;
+        }
+
+        sendJson(res, 200, { inserted: inserted, merged: merged, skipped: skipped, filtered: filtered });
+        if (inserted > 0 || merged > 0) broadcastDataUpdate(db);
+        logRequest(req, 200, "queue sessions device=" + deviceId + " inserted=" + inserted + " merged=" + merged + " skipped=" + skipped + " filtered=" + filtered);
         return;
       }
 
