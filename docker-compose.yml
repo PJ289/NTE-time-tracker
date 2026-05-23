@@ -1,0 +1,35 @@
+services:
+  nte-server:
+    image: pj289/nte-time-tracker-nte-server:latest
+    pull_policy: always
+    build: .
+    container_name: nte-tracker-server
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+      - path: .env.server
+        required: false
+    environment:
+      NTE_DATA_DIR: /data
+      NTE_HOST: ${NTE_HOST:-0.0.0.0}
+      NTE_PORT: ${NTE_PORT:-28183}
+      NTE_ADMIN_TOKEN: ${NTE_ADMIN_TOKEN:-}
+      NTE_MIN_SESSION_SECONDS: ${NTE_MIN_SESSION_SECONDS:-30}
+      NTE_MERGE_GAP_SECONDS: ${NTE_MERGE_GAP_SECONDS:-120}
+    ports:
+      - "${NTE_PORT:-28183}:${NTE_PORT:-28183}"
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:'+(process.env.NTE_PORT||28183)+'/data',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

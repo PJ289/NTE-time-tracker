@@ -36,6 +36,66 @@ This repo now includes a **server-first** mode that is cross-platform and stores
 
 The dashboard will be available on `http://0.0.0.0:28183` (or the port you set).
 
+### Docker (Server)
+
+Run the server in a container with SQLite data persisted on the host in `./data/nte.db`.
+
+**Requirements:** Docker Engine and the [Compose plugin](https://docs.docker.com/compose/install/linux/) (typical on Linux servers).
+
+**Published image:** [`pj289/nte-time-tracker-nte-server:latest`](https://hub.docker.com/r/pj289/nte-time-tracker-nte-server) on Docker Hub. `docker-compose.yml` uses this image by default — no local build required.
+
+#### Quick start (recommended)
+
+You only need `docker-compose.yml`, `.env.example`, and a `.env` file with your settings:
+
+```bash
+cp .env.example .env
+# Edit .env — set NTE_ADMIN_TOKEN to a long random value
+
+docker compose pull
+docker compose up -d
+```
+
+Open the dashboard at `http://<server-ip>:28183` (or the port in `.env`).
+
+**Configuration is not baked into the image.** Create or edit `.env` before starting (or when changing token/port). You do **not** need `.env` to pull or build the image — only when running the container.
+
+To change settings later: edit `.env`, then `docker compose up -d` again.
+
+**Without a `.env` file:**
+
+```bash
+export NTE_ADMIN_TOKEN="$(openssl rand -hex 32)"
+docker compose up -d
+```
+
+**Data location:** `./data/nte.db` (created on first run).
+
+**Logs:** `docker compose logs -f`
+
+**Update to a newer published image:** `docker compose pull && docker compose up -d`
+
+PC and Android clients should set `NTE_SERVER_URL` to `http://<host-ip>:28183` on your LAN.
+
+#### Build from source (developers)
+
+If you are hacking on the server code, build locally instead of pulling:
+
+```bash
+docker compose up --build -d
+```
+
+Compose builds from the `Dockerfile` and tags the result as `pj289/nte-time-tracker-nte-server:latest`.
+
+#### Publish a new image (maintainers)
+
+After building locally, tag the Compose image name and push (Docker Hub will not find a tag until you do this):
+
+```bash
+docker tag nte-time-tracker-nte-server:latest pj289/nte-time-tracker-nte-server:latest
+docker push pj289/nte-time-tracker-nte-server:latest
+```
+
 ### Environment Variables (Server)
 
 Server reads `.env.server` (and falls back to `.env` if present).

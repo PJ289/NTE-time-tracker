@@ -5,6 +5,8 @@ notify.ps1
 # Local secrets and dependencies
 .env
 .env.*
+!.env.server.example
+!.env.example
 node_modules/
 
 # Client sync state (stored locally in data dir, but keep safe if copied here)
