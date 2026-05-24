@@ -20,48 +20,6 @@
 		<name>NTE Tracker</name>
 		<pids>2</pids>
 		<tids>3,8</tids>
-		<ProfileVariable sr="pv0">
-			<clearout>false</clearout>
-			<exportval>http://&lt;server-ip&gt;:28183</exportval>
-			<immutable>false</immutable>
-			<pvci>true</pvci>
-			<pvd>Server base URL (e.g. http://192.168.1.10:28183)</pvd>
-			<pvdn>Server URL</pvdn>
-			<pvid>1</pvid>
-			<pvit>pj</pvit>
-			<pvn>%NTE_SERVER</pvn>
-			<pvt>t</pvt>
-			<pvv>http://&lt;server-ip&gt;:28183</pvv>
-			<strout>true</strout>
-		</ProfileVariable>
-		<ProfileVariable sr="pv1">
-			<clearout>false</clearout>
-			<exportval></exportval>
-			<immutable>false</immutable>
-			<pvci>true</pvci>
-			<pvd>Device ID from the dashboard</pvd>
-			<pvdn>Device ID</pvdn>
-			<pvid>2</pvid>
-			<pvit>pj</pvit>
-			<pvn>%NTE_DEVICE_ID</pvn>
-			<pvt>t</pvt>
-			<pvv></pvv>
-			<strout>true</strout>
-		</ProfileVariable>
-		<ProfileVariable sr="pv2">
-			<clearout>false</clearout>
-			<exportval></exportval>
-			<immutable>false</immutable>
-			<pvci>true</pvci>
-			<pvd>Device token from the dashboard</pvd>
-			<pvdn>Device Token</pvdn>
-			<pvid>3</pvid>
-			<pvit>pj</pvit>
-			<pvn>%NTE_DEVICE_TOKEN</pvn>
-			<pvt>t</pvt>
-			<pvv></pvv>
-			<strout>true</strout>
-		</ProfileVariable>
 	</Project>
 	<Task sr="task3">
 		<cdate>1700000000000</cdate>
