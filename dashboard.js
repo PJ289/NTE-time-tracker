@@ -449,7 +449,7 @@ function computeStats() {
   var now = new Date();
   var startOfWeek = new Date(now);
   startOfWeek.setHours(0, 0, 0, 0);
-  startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
+  startOfWeek.setDate(startOfWeek.getDate() - ((startOfWeek.getDay() + 6) % 7)); // Monday 00:00
   var startOfLastWeek = new Date(startOfWeek);
   startOfLastWeek.setDate(startOfLastWeek.getDate() - 7);
   var thisWeek = 0, lastWeek = 0;
