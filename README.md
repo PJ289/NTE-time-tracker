@@ -401,15 +401,103 @@ Live stats still use the network: **Server-Sent Events** (`/events`) and API cal
 
 After install, open the icon on your home screen. Tabs, calendar, devices, and live **NOW PLAYING** behave the same as in the browser.
 
-### HTTPS and LAN access
+### Secure context for PWA install (Android Chrome)
+
+Chrome on Android only offers the full **Install app** flow in a [secure context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts): **HTTPS**, `localhost`, or `127.0.0.1`. A plain `http://192.168.x.x:28183` URL from your phone is **not** secure by default.
 
 | Context | Install / PWA notes |
 |---------|---------------------|
 | `http://127.0.0.1:27183` on the **same PC** | Secure context — full PWA support in Chrome |
-| `http://<lan-ip>:28183` from your **phone** | Works in the browser; **Chrome on Android** may only show **Install app** over **HTTPS** (or use **Add to Home screen**, which still works on many devices) |
-| **iOS Safari** | **Add to Home Screen** usually works over HTTP on your LAN |
+| `http://<lan-ip>:28183` from your **phone** | Browsing works; **Install app** may be missing unless you use one of the options below |
+| **iOS Safari** | **Add to Home Screen** usually works over HTTP on your LAN (no extra setup) |
 
-For reliable **Install app** on Android when using a LAN IP, put the server behind HTTPS (reverse proxy, Tailscale, Cloudflare Tunnel, etc.).
+Pick **one** of these approaches for Android when using a LAN IP:
+
+#### Option A: HTTP without HTTPS (Chrome flag, per device)
+
+This treats your local HTTP origin as secure **only on that phone** (useful for home lab / testing).
+
+1. On the Android phone, open **`chrome://flags`** in Chrome.
+2. Search for **`Insecure origins treated as secure`**.
+3. Set it to **Enabled**.
+4. In the text field, add the **exact** dashboard URL, including protocol and port, for example:
+   ```
+   http://192.168.1.10:28183
+   ```
+   Multiple origins can be comma-separated if needed.
+5. Tap **Relaunch** so Chrome restarts and applies the flag.
+6. Open that URL again → menu → **Install app** / **Add to Home screen**.
+
+**Notes:**
+
+- The URL must match what you type in the address bar (same IP, port, and `http` vs `https`).
+- The flag is per browser profile; reset or OS updates may clear it.
+- This does **not** encrypt traffic — only for trusted home networks.
+
+#### Option B: HTTPS locally (Nginx + self-signed certificate)
+
+Put **Nginx** (or another reverse proxy) in front of the tracker server on port **28183**. Terminate TLS on the proxy; the Node server keeps listening on HTTP locally.
+
+**1. Create a certificate (include your LAN IP in SAN)**
+
+Replace `192.168.1.10` with your server’s IP. A cert without the correct **Subject Alternative Name (SAN)** will warn or fail when opening `https://192.168.1.10/`.
+
+```bash
+openssl req -x509 -nodes -days 825 -newkey rsa:2048 \
+  -keyout nte-dashboard.key \
+  -out nte-dashboard.crt \
+  -subj "/CN=NTE Dashboard" \
+  -addext "subjectAltName=IP:192.168.1.10,DNS:nte-dashboard.local"
+```
+
+**2. Nginx site (example)**
+
+Adjust paths, IP, and upstream port (`28183` is the default Docker/Compose port; Node-only server may use `27183`).
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name 192.168.1.10;
+
+    ssl_certificate     /etc/nginx/certs/nte-dashboard.crt;
+    ssl_certificate_key /etc/nginx/certs/nte-dashboard.key;
+
+    location / {
+        proxy_pass http://127.0.0.1:28183;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Required for live dashboard (Server-Sent Events)
+        proxy_buffering off;
+        proxy_read_timeout 86400s;
+    }
+}
+```
+
+Enable the site, reload Nginx, and allow **443** (and keep **28183** only on localhost if you want TLS only via Nginx).
+
+**3. On the phone**
+
+1. Open `https://192.168.1.10/` (same host as in the cert SAN).
+2. Accept the **certificate warning** (self-signed) — Advanced → Proceed, or install/trust the CA if you use your own PKI.
+3. Confirm the dashboard loads, then **Install app** (if the CA is not trusted you need to do the same like [here](#option-a-http-without-https-chrome-flag-per-device)).
+
+Important note: If the certificate is not trusted you need to enable "Trust any certificate" on Tasker. More info about that [here](TASKER_SETUP.md/#other-settings)
+
+**4. PC client sync (optional)**
+
+If the PC uploads sessions through the proxy, set:
+
+```env
+NTE_SERVER_URL=https://192.168.1.10
+```
+
+(Node’s built-in client does not validate custom CAs by default; for a self-signed cert you may need a proper CA, use HTTP on port 28183 for sync only, or terminate TLS with a cert the PC trusts.)
+
+**Other HTTPS options:** Tailscale, Cloudflare Tunnel, or a real certificate (e.g. Let’s Encrypt with a public hostname) work the same way — any HTTPS URL the phone trusts is enough for PWA install.
 
 ### PWA files (reference)
 
@@ -501,7 +589,9 @@ schtasks /query /tn "NTETracker"
 ### PWA does not install from the phone
 
 - Confirm you can open the dashboard in the mobile browser first (same Wi‑Fi, correct IP and port, firewall open).
-- On **Android Chrome** over `http://192.168.x.x`, use **Add to Home screen** if **Install app** is missing — or serve the dashboard over **HTTPS** (see [Mobile dashboard (PWA)](#mobile-dashboard-pwa)).
+- On **Android Chrome** over `http://192.168.x.x`, **Install app** needs a secure context — use [Option A (Chrome flag)](#option-a-http-without-https-chrome-flag-per-device) or [Option B (HTTPS / Nginx)](#option-b-https-locally-nginx--self-signed-certificate), or **Add to Home screen** as a lighter fallback.
+- If using **HTTPS** with a self-signed cert, open the site once and accept the warning; ensure the cert **SAN** includes your LAN IP.
+- If live stats freeze behind Nginx, check `proxy_buffering off` and long `proxy_read_timeout` for `/events` (see [Option B](#option-b-https-locally-nginx--self-signed-certificate)).
 - On **iOS**, use **Safari** (not all in-app browsers offer Add to Home Screen).
 - After updating the server, close the installed app and reopen it so the service worker can refresh.
 
