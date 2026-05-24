@@ -1560,4 +1560,10 @@ fetch("/data")
       document.getElementById("status").textContent = "";
       document.getElementById("status").className = "status-bar";
     };
+
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(function () {
+        /* PWA optional — ignore registration failures */
+      });
+    }
   });

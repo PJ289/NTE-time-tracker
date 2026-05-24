@@ -21,6 +21,7 @@ A lightweight, automatic game time tracker for Neverness to Everness (NTE) that 
   - [Environment variables (server)](#environment-variables-server)
   - [Device management](#device-management-server-dashboard)
   - [Legacy JSON migration](#legacy-json-migration)
+- [Mobile dashboard (PWA)](#mobile-dashboard-pwa)
 - [Android (Tasker)](#android-tasker)
 - [Manual sessions](#manual-sessions)
 - [Data Storage](#data-storage)
@@ -40,6 +41,7 @@ A lightweight, automatic game time tracker for Neverness to Everness (NTE) that 
 - **Crash recovery**: Safely handles unexpected shutdowns or crashes without losing your data
 - **Zero maintenance**: Once installed, it runs automatically on login and requires no user interaction
 - **Optional server sync**: Upload sessions to a central server (PC + Android) when `NTE_SERVER_URL` is configured
+- **Mobile-friendly dashboard (PWA)**: Install the dashboard on your phone’s home screen — works with the [server](#server-mode) and the local PC dashboard at `127.0.0.1`
 
 ## How It Works
 
@@ -377,6 +379,51 @@ Imported sessions are assigned to a **PC (Legacy)** device. Link your PC client 
 
 ---
 
+## Mobile dashboard (PWA)
+
+The dashboard (`dashboard.html`) is a **Progressive Web App (PWA)**. You can add it to your phone’s home screen and open it like a native app (standalone UI, dark theme, safe areas for notched phones).
+
+It is served by:
+
+| Host | URL (example) |
+|------|----------------|
+| **Server** | `http://<server-lan-ip>:28183` |
+| **PC client** (while tracker runs) | `http://127.0.0.1:27183` on the same device only |
+
+Live stats still use the network: **Server-Sent Events** (`/events`) and API calls are never cached. The service worker only caches the UI shell (HTML, CSS, JS, icons).
+
+### Install on your phone
+
+1. Connect the phone to the same network as the server (or use the PC’s local URL only on that PC).
+2. Open the dashboard URL in the browser.
+3. Install or add to home screen:
+   - **Android (Chrome):** menu → **Install app** / **Add to Home screen**
+   - **iOS (Safari):** Share → **Add to Home Screen**
+
+After install, open the icon on your home screen. Tabs, calendar, devices, and live **NOW PLAYING** behave the same as in the browser.
+
+### HTTPS and LAN access
+
+| Context | Install / PWA notes |
+|---------|---------------------|
+| `http://127.0.0.1:27183` on the **same PC** | Secure context — full PWA support in Chrome |
+| `http://<lan-ip>:28183` from your **phone** | Works in the browser; **Chrome on Android** may only show **Install app** over **HTTPS** (or use **Add to Home screen**, which still works on many devices) |
+| **iOS Safari** | **Add to Home Screen** usually works over HTTP on your LAN |
+
+For reliable **Install app** on Android when using a LAN IP, put the server behind HTTPS (reverse proxy, Tailscale, Cloudflare Tunnel, etc.).
+
+### PWA files (reference)
+
+| File | Role |
+|------|------|
+| `manifest.webmanifest` | App name, colors, `standalone` display, icons |
+| `sw.js` | Service worker — caches UI; live routes stay network-only |
+| `icons/icon-192.png`, `icons/icon-512.png` | Home-screen icons |
+
+Served by `server.js` and by the PC client’s built-in HTTP server when the local dashboard is enabled.
+
+---
+
 ## Android (Tasker)
 
 See [TASKER_SETUP.md](TASKER_SETUP.md) for step-by-step Android setup.
@@ -452,6 +499,13 @@ schtasks /query /tn "NTETracker"
 - Run `sync.bat` or `node tracker.js --sync` and read console errors.
 - On the server: verify firewall allows the port; check `docker compose logs`.
 
+### PWA does not install from the phone
+
+- Confirm you can open the dashboard in the mobile browser first (same Wi‑Fi, correct IP and port, firewall open).
+- On **Android Chrome** over `http://192.168.x.x`, use **Add to Home screen** if **Install app** is missing — or serve the dashboard over **HTTPS** (see [Mobile dashboard (PWA)](#mobile-dashboard-pwa)).
+- On **iOS**, use **Safari** (not all in-app browsers offer Add to Home Screen).
+- After updating the server, close the installed app and reopen it so the service worker can refresh.
+
 ### Game not detected
 
 - Process must be `HTGame.exe`.
@@ -482,6 +536,7 @@ schtasks /query /tn "NTETracker"
 ### Features
 
 - Live dashboard (Server-Sent Events)
+- PWA dashboard (manifest + service worker) for mobile home-screen install
 - Interim saves every 60 s while playing
 - Crash recovery on next startup
 - Last 100 sessions in local JSON
@@ -506,6 +561,9 @@ nte-time-tracker/
 ├── tracker.js          # PC client (tracking + optional sync)
 ├── server.js           # Central server (optional)
 ├── dashboard.html/css/js
+├── manifest.webmanifest
+├── sw.js               # PWA service worker
+├── icons/              # PWA icons (192, 512)
 ├── launcher.vbs        # Silent start (no console)
 ├── setup.bat           # Install + start now
 ├── install.bat         # Install only

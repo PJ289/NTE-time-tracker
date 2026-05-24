@@ -11,7 +11,12 @@ body {
   background: #0f0f0f;
   color: #e0e0e0;
   min-height: 100vh;
+  min-height: 100dvh;
   padding: 2rem;
+  padding-left: max(2rem, env(safe-area-inset-left));
+  padding-right: max(2rem, env(safe-area-inset-right));
+  padding-bottom: max(2rem, env(safe-area-inset-bottom));
+  padding-top: max(2rem, env(safe-area-inset-top));
 }
 
 /* ── Background Character Art ──────────────────────────────────── */
@@ -990,6 +995,10 @@ td.device-cell {
 @media (max-width: 640px) {
   body {
     padding: 0.85rem;
+    padding-left: max(0.85rem, env(safe-area-inset-left));
+    padding-right: max(0.85rem, env(safe-area-inset-right));
+    padding-bottom: max(0.85rem, env(safe-area-inset-bottom));
+    padding-top: max(0.85rem, env(safe-area-inset-top));
   }
 
   .container {
@@ -1027,6 +1036,13 @@ td.device-cell {
     padding: 0.6rem 0.85rem;
     white-space: nowrap;
     flex: 0 0 auto;
+    min-height: 44px;
+  }
+
+  .session-tool-btn,
+  .device-admin-btn,
+  .share-btn {
+    min-height: 44px;
   }
 
   .session-tools-row,

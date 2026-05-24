@@ -9,7 +9,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-COPY server.js dashboard.html dashboard.css dashboard.js favicon.ico bg.png ./
+COPY server.js dashboard.html dashboard.css dashboard.js sw.js manifest.webmanifest favicon.ico bg.png ./
+COPY icons ./icons/
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
   && chmod +x /usr/local/bin/docker-entrypoint.sh \

@@ -594,7 +594,12 @@ var STATIC_FILES = {};
     '/': { path: 'dashboard.html', type: 'text/html; charset=utf-8', encoding: 'utf8' },
     '/dashboard.css': { path: 'dashboard.css', type: 'text/css; charset=utf-8', encoding: 'utf8' },
     '/dashboard.js': { path: 'dashboard.js', type: 'application/javascript; charset=utf-8', encoding: 'utf8' },
-    '/bg.png': { path: 'bg.png', type: 'image/png', encoding: null, cache: 'public, max-age=86400' }
+    '/sw.js': { path: 'sw.js', type: 'application/javascript; charset=utf-8', encoding: 'utf8', cache: 'no-cache' },
+    '/manifest.webmanifest': { path: 'manifest.webmanifest', type: 'application/manifest+json; charset=utf-8', encoding: 'utf8', cache: 'public, max-age=86400' },
+    '/favicon.ico': { path: 'favicon.ico', type: 'image/x-icon', encoding: null, cache: 'public, max-age=86400' },
+    '/bg.png': { path: 'bg.png', type: 'image/png', encoding: null, cache: 'public, max-age=86400' },
+    '/icons/icon-192.png': { path: 'icons/icon-192.png', type: 'image/png', encoding: null, cache: 'public, max-age=86400' },
+    '/icons/icon-512.png': { path: 'icons/icon-512.png', type: 'image/png', encoding: null, cache: 'public, max-age=86400' }
   };
   for (var route in files) {
     var f = files[route];
