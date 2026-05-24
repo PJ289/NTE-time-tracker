@@ -336,9 +336,11 @@ docker compose up --build -d
 
 #### Publish a new image (maintainers)
 
+Build and push for **amd64** (NAS/x86) and **arm64** (Apple Silicon) so `docker compose pull` works everywhere:
+
 ```bash
-docker tag nte-time-tracker-nte-server:latest pj289/nte-time-tracker-nte-server:latest
-docker push pj289/nte-time-tracker-nte-server:latest
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t pj289/nte-time-tracker-nte-server:latest --push .
 ```
 
 ### Environment variables (server)
