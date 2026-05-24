@@ -1,0 +1,14 @@
+NTE Time Tracker
+
+This project is a fork and extension of the original NTE playtime tracker.
+
+Original work
+  Copyright (c) 2026 Eliška Šindelářová
+  Initial commit: NTE playtime tracker (2026-05-04)
+
+Fork and additional work
+  Copyright (c) 2026 PJ289
+  Includes server mode, Docker deployment, PWA dashboard, Tasker integration,
+  and related documentation and tooling.
+
+Licensed under the MIT License. See LICENSE for the full text.

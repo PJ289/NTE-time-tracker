@@ -661,6 +661,8 @@ nte-time-tracker/
 ├── .env.client         # PC client config (you create this)
 ├── .env.example        # Docker / server example
 ├── docker-compose.yml
+├── LICENSE
+├── NOTICE
 └── README.md
 ```
 
@@ -668,4 +670,9 @@ nte-time-tracker/
 
 ## License
 
-Free to use and modify.
+Licensed under the [MIT License](LICENSE).
+
+- **Original tracker:** Copyright (c) 2026 Eliška Šindelářová (initial commit, 2026-05-04)
+- **This fork:** Copyright (c) 2026 PJ289 — server mode, Docker, PWA, Tasker, and related work
+
+See [NOTICE](NOTICE) for attribution details.
