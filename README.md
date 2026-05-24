@@ -341,8 +341,7 @@ docker compose up --build -d
 Build and push for **amd64** (NAS/x86) and **arm64** (Apple Silicon) so `docker compose pull` works everywhere:
 
 ```bash
-docker buildx build --platform linux/amd64,linux/arm64 \
-  -t pj289/nte-time-tracker-nte-server:latest --push .
+docker buildx build --platform linux/amd64,linux/arm64 -t pj289/nte-time-tracker-nte-server:latest --push .
 ```
 
 ### Environment variables (server)
