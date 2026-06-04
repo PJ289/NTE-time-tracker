@@ -307,6 +307,26 @@ function setAdminStatus(message, isError) {
   el.style.color = isError ? "#ff8a80" : "#6fcf97";
 }
 
+var ADMIN_REQUIRED_MSG = "Admin token required. Enter and save it in the Devices tab (Admin Token).";
+
+function requireAdminAction() {
+  if (adminToken) return true;
+  alert(ADMIN_REQUIRED_MSG);
+  setAdminStatus(ADMIN_REQUIRED_MSG, true);
+  return false;
+}
+
+function refreshDashboardData() {
+  return fetch("/data")
+    .then(function (r) {
+      if (!r.ok) throw new Error("Failed to refresh data");
+      return r.json();
+    })
+    .then(function (data) {
+      applyData(normalizeData(data));
+    });
+}
+
 function formatLastSeen(iso) {
   if (!iso) return "Never";
   var d = new Date(iso);
@@ -685,6 +705,7 @@ function buildDayCard(day, collapsible, showActions) {
   for (var j = 0; j < day.sessions.length; j++) {
     var sess = day.sessions[j];
     var tr = document.createElement("tr");
+    if (sess.id) tr.setAttribute("data-session-id", String(sess.id));
 
     tr.appendChild(createLabeledTd(fmtTime(sess.startTime), "Start"));
     tr.appendChild(createLabeledTd(fmtTime(sess.endTime), "End"));
@@ -730,14 +751,14 @@ function buildDayCard(day, collapsible, showActions) {
 
       var editBtn = createEl("button", "session-tool-btn");
       editBtn.textContent = "Edit";
-      editBtn.disabled = !adminToken || !sess.id;
+      editBtn.disabled = !sess.id;
       editBtn.onclick = function (session) {
         return function () { openEditModal(session); };
       }(sess);
 
       var deleteBtn = createEl("button", "session-tool-btn danger");
       deleteBtn.textContent = "Delete";
-      deleteBtn.disabled = !adminToken || !sess.id;
+      deleteBtn.disabled = !sess.id;
       deleteBtn.onclick = function (session) {
         return function () { deleteSession(session); };
       }(sess);
@@ -861,12 +882,10 @@ function buildDeviceRow(device) {
   var actions = createEl("div", "device-actions");
   var editBtn = createEl("button", "device-action-btn");
   editBtn.textContent = "Edit";
-  editBtn.disabled = !adminToken;
   actions.appendChild(editBtn);
 
   var rotateBtn = createEl("button", "device-action-btn");
   rotateBtn.textContent = "Rotate Token";
-  rotateBtn.disabled = !adminToken;
   actions.appendChild(rotateBtn);
   main.appendChild(actions);
 
@@ -938,10 +957,7 @@ function buildDeviceRow(device) {
   row.appendChild(tokenNotice);
 
   editBtn.onclick = function () {
-    if (!adminToken) {
-      setAdminStatus("Admin token required", true);
-      return;
-    }
+    if (!requireAdminAction()) return;
     edit.classList.toggle("open");
   };
 
@@ -950,6 +966,7 @@ function buildDeviceRow(device) {
   };
 
   saveBtn.onclick = function () {
+    if (!requireAdminAction()) return;
     var payload = {
       name: nameInput.value.trim(),
       type: typeInput.value.trim(),
@@ -962,6 +979,7 @@ function buildDeviceRow(device) {
         if (!res.ok) throw new Error((res.json && res.json.error) || "Update failed");
         setAdminStatus("Device updated", false);
         edit.classList.remove("open");
+        return refreshDashboardData();
       })
       .catch(function (err) {
         setAdminStatus(err.message, true);
@@ -969,11 +987,13 @@ function buildDeviceRow(device) {
   };
 
   deleteReassign.onclick = function () {
+    if (!requireAdminAction()) return;
     if (!confirm("WARNING: This will delete the device and reassign its sessions to Unknown. Continue?")) return;
     apiRequest("/api/devices/" + device.id + "?mode=reassign", "DELETE", null, true)
       .then(function (res) {
         if (!res.ok) throw new Error((res.json && res.json.error) || "Delete failed");
         setAdminStatus("Device deleted (reassigned)", false);
+        return refreshDashboardData();
       })
       .catch(function (err) {
         setAdminStatus(err.message, true);
@@ -981,11 +1001,13 @@ function buildDeviceRow(device) {
   };
 
   deleteAll.onclick = function () {
+    if (!requireAdminAction()) return;
     if (!confirm("WARNING: This will delete the device and ALL its sessions. This cannot be undone. Continue?")) return;
     apiRequest("/api/devices/" + device.id + "?mode=delete", "DELETE", null, true)
       .then(function (res) {
         if (!res.ok) throw new Error((res.json && res.json.error) || "Delete failed");
         setAdminStatus("Device and sessions deleted", false);
+        return refreshDashboardData();
       })
       .catch(function (err) {
         setAdminStatus(err.message, true);
@@ -993,10 +1015,7 @@ function buildDeviceRow(device) {
   };
 
   rotateBtn.onclick = function () {
-    if (!adminToken) {
-      setAdminStatus("Admin token required", true);
-      return;
-    }
+    if (!requireAdminAction()) return;
     if (!confirm("Rotate token for this device? Old token will stop working.")) return;
     apiRequest("/api/devices/" + device.id + "/token", "POST", {}, true)
       .then(function (res) {
@@ -1004,6 +1023,7 @@ function buildDeviceRow(device) {
         tokenNotice.textContent = "New token: " + res.json.token;
         tokenNotice.style.display = "block";
         setAdminStatus("Token rotated", false);
+        return refreshDashboardData();
       })
       .catch(function (err) {
         setAdminStatus(err.message, true);
@@ -1033,7 +1053,7 @@ function renderDevices() {
 function updateCombineButtonState() {
   var btn = document.getElementById("combine-btn");
   var count = Object.keys(selectedSessionIds).length;
-  if (btn) btn.disabled = !adminToken || count !== 2;
+  if (btn) btn.disabled = count !== 2;
   if (count === 0) updateCombineStatus("", false);
   else updateCombineStatus(count + " selected", false);
 }
@@ -1050,15 +1070,13 @@ function combineSelectedSessions() {
     updateCombineStatus("Select exactly 2 sessions", true);
     return;
   }
-  if (!adminToken) {
-    updateCombineStatus("Admin token required", true);
-    return;
-  }
+  if (!requireAdminAction()) return;
   apiRequest("/api/sessions/merge", "POST", { sessionIds: ids }, true)
     .then(function (res) {
       if (!res.ok) throw new Error((res.json && res.json.error) || "Merge failed");
       updateCombineStatus("Sessions merged", false);
       clearSelection();
+      return refreshDashboardData();
     })
     .catch(function (err) {
       updateCombineStatus(err.message, true);
@@ -1067,16 +1085,15 @@ function combineSelectedSessions() {
 
 function deleteSession(session) {
   if (!session || !session.id) return;
-  if (!adminToken) {
-    updateCombineStatus("Admin token required", true);
-    return;
-  }
+  if (!requireAdminAction()) return;
   var message = "WARNING: Delete session " + sessionDescription(session) + "?";
   if (!confirm(message)) return;
   apiRequest("/api/sessions/" + session.id, "DELETE", null, true)
     .then(function (res) {
       if (!res.ok) throw new Error((res.json && res.json.error) || "Delete failed");
+      delete selectedSessionIds[session.id];
       updateCombineStatus("Session deleted", false);
+      return refreshDashboardData();
     })
     .catch(function (err) {
       updateCombineStatus(err.message, true);
@@ -1085,10 +1102,7 @@ function deleteSession(session) {
 
 function openEditModal(session) {
   if (!session || !session.id) return;
-  if (!adminToken) {
-    updateCombineStatus("Admin token required", true);
-    return;
-  }
+  if (!requireAdminAction()) return;
   editingSessionId = session.id;
 
   var modal = document.getElementById("session-modal");
@@ -1115,10 +1129,7 @@ function closeEditModal() {
 
 function saveEditSession() {
   if (!editingSessionId) return;
-  if (!adminToken) {
-    updateCombineStatus("Admin token required", true);
-    return;
-  }
+  if (!requireAdminAction()) return;
   var startInput = document.getElementById("edit-start");
   var endInput = document.getElementById("edit-end");
   var deviceSelect = document.getElementById("edit-device");
@@ -1144,6 +1155,7 @@ function saveEditSession() {
       if (!res.ok) throw new Error((res.json && res.json.error) || "Update failed");
       if (status) status.textContent = "Saved";
       closeEditModal();
+      return refreshDashboardData();
     })
     .catch(function (err) {
       if (status) status.textContent = err.message;
@@ -1152,6 +1164,7 @@ function saveEditSession() {
 
 function deleteEditSession() {
   if (!editingSessionId) return;
+  if (!requireAdminAction()) return;
   var session = null;
   for (var i = 0; i < allSessions.length; i++) {
     if (String(allSessions[i].id) === String(editingSessionId)) {
@@ -1164,7 +1177,9 @@ function deleteEditSession() {
   apiRequest("/api/sessions/" + editingSessionId, "DELETE", null, true)
     .then(function (res) {
       if (!res.ok) throw new Error((res.json && res.json.error) || "Delete failed");
+      delete selectedSessionIds[editingSessionId];
       closeEditModal();
+      return refreshDashboardData();
     })
     .catch(function (err) {
       var status = document.getElementById("edit-status");
@@ -1239,7 +1254,7 @@ function fillConfigFields(config) {
 
 function loadServerConfig() {
   if (!adminToken) {
-    setConfigStatus("Admin token required", true);
+    setConfigStatus(ADMIN_REQUIRED_MSG, true);
     return;
   }
   apiRequest("/api/config", "GET", null, true)
@@ -1254,8 +1269,8 @@ function loadServerConfig() {
 }
 
 function saveServerConfig() {
-  if (!adminToken) {
-    setConfigStatus("Admin token required", true);
+  if (!requireAdminAction()) {
+    setConfigStatus(ADMIN_REQUIRED_MSG, true);
     return;
   }
   var payload = {
@@ -1397,10 +1412,7 @@ fetch("/data")
     var createBtn = document.getElementById("device-create-btn");
     if (createBtn) {
       createBtn.onclick = function () {
-        if (!adminToken) {
-          setAdminStatus("Admin token required", true);
-          return;
-        }
+        if (!requireAdminAction()) return;
         var name = document.getElementById("device-create-name");
         var color = document.getElementById("device-create-color");
         var testFlag = document.getElementById("device-create-test");
@@ -1418,6 +1430,7 @@ fetch("/data")
           .then(function (res) {
             if (!res.ok) throw new Error((res.json && res.json.error) || "Create failed");
             if (status) status.textContent = "Created. Token: " + res.json.token;
+            return refreshDashboardData();
           })
           .catch(function (err) {
             if (status) status.textContent = err.message;
@@ -1428,10 +1441,7 @@ fetch("/data")
     var manualSave = document.getElementById("manual-save");
     if (manualSave) {
       manualSave.onclick = function () {
-        if (!adminToken) {
-          updateCombineStatus("Admin token required", true);
-          return;
-        }
+        if (!requireAdminAction()) return;
         var startInput = document.getElementById("manual-start");
         var endInput = document.getElementById("manual-end");
         var deviceSelect = document.getElementById("manual-device");
@@ -1462,6 +1472,7 @@ fetch("/data")
             if (status) status.textContent = res.json && res.json.merged ? "Merged into previous" : "Session added";
             if (startInput) startInput.value = "";
             if (endInput) endInput.value = "";
+            return refreshDashboardData();
           })
           .catch(function (err) {
             if (status) status.textContent = err.message;
