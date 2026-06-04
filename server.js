@@ -1270,6 +1270,61 @@ function sessionDurationFromIso(startIso, endIso) {
   return Math.max(0, Math.floor((endMs - startMs) / 1000));
 }
 
+function findOverlappingSessions(db, deviceId, startIso, endIso) {
+  return db.prepare(
+    "SELECT id, start_time AS startTime, end_time AS endTime, is_manual AS isManual FROM sessions WHERE device_id = ? AND start_time < ? AND end_time > ? ORDER BY start_time ASC"
+  ).all(deviceId, endIso, startIso);
+}
+
+function absorbOverlappingSessions(db, deviceId, session, isManual) {
+  const overlaps = findOverlappingSessions(db, deviceId, session.startTime, session.endTime);
+  if (!overlaps.length) return null;
+
+  const startMs = new Date(session.startTime).getTime();
+  const endMs = new Date(session.endTime).getTime();
+  if (isNaN(startMs) || isNaN(endMs)) return { inserted: 0, merged: 0, skipped: 1 };
+
+  let unionStart = startMs;
+  let unionEnd = endMs;
+  let mergedManual = isManual ? 1 : 0;
+  const ids = [];
+
+  for (let i = 0; i < overlaps.length; i++) {
+    const row = overlaps[i];
+    const rowStart = new Date(row.startTime).getTime();
+    const rowEnd = new Date(row.endTime).getTime();
+    if (!isNaN(rowStart)) unionStart = Math.min(unionStart, rowStart);
+    if (!isNaN(rowEnd)) unionEnd = Math.max(unionEnd, rowEnd);
+    if (row.isManual) mergedManual = 1;
+    ids.push(row.id);
+  }
+
+  const containedByExisting = overlaps.every(function (row) {
+    const rowStart = new Date(row.startTime).getTime();
+    const rowEnd = new Date(row.endTime).getTime();
+    return !isNaN(rowStart) && !isNaN(rowEnd) && startMs >= rowStart && endMs <= rowEnd;
+  });
+  if (containedByExisting) return { inserted: 0, merged: 0, skipped: 1 };
+
+  const newStartIso = new Date(unionStart).toISOString();
+  const newEndIso = new Date(unionEnd).toISOString();
+  const newDuration = sessionDurationFromIso(newStartIso, newEndIso);
+
+  db.prepare(
+    "UPDATE sessions SET start_time = ?, end_time = ?, duration = ?, is_manual = ?, updated_at = ? WHERE id = ?"
+  ).run(newStartIso, newEndIso, newDuration, mergedManual, nowIso(), ids[0]);
+
+  if (ids.length > 1) {
+    const deleteStmt = db.prepare("DELETE FROM sessions WHERE id = ?");
+    const tx = db.transaction(function (removeIds) {
+      for (let j = 1; j < removeIds.length; j++) deleteStmt.run(removeIds[j]);
+    });
+    tx(ids);
+  }
+
+  return { inserted: 0, merged: 1, skipped: 0 };
+}
+
 function mergeWithPreviousSession(db, deviceId, session, isManual) {
   const mergeGapSeconds = getMergeGapSeconds();
   if (!mergeGapSeconds || mergeGapSeconds <= 0) return null;
@@ -1284,7 +1339,16 @@ function mergeWithPreviousSession(db, deviceId, session, isManual) {
   const endMs = new Date(session.endTime).getTime();
   if (isNaN(lastEnd) || isNaN(lastStart) || isNaN(startMs) || isNaN(endMs)) return null;
 
-  if (startMs < lastEnd) return null;
+  if (startMs < lastEnd) {
+    if (endMs <= lastEnd) return last.id;
+    const newDuration = Math.max(0, Math.floor((endMs - lastStart) / 1000));
+    const mergedIsManual = (last.isManual ? 1 : 0) || (isManual ? 1 : 0);
+    db.prepare(
+      "UPDATE sessions SET end_time = ?, duration = ?, is_manual = ?, updated_at = ? WHERE id = ?"
+    ).run(new Date(endMs).toISOString(), newDuration, mergedIsManual, nowIso(), last.id);
+    return last.id;
+  }
+
   const gapSeconds = Math.floor((startMs - lastEnd) / 1000);
   if (gapSeconds > mergeGapSeconds) return null;
 
@@ -1303,6 +1367,9 @@ function mergeWithPreviousSession(db, deviceId, session, isManual) {
 function insertSessionWithMerge(db, deviceId, session, isManual) {
   if (!session || !deviceId) return { inserted: 0, merged: 0, skipped: 1 };
   if (session.duration < getMinSessionDuration()) return { inserted: 0, merged: 0, skipped: 1 };
+
+  const overlapResult = absorbOverlappingSessions(db, deviceId, session, isManual);
+  if (overlapResult) return overlapResult;
 
   const mergedId = mergeWithPreviousSession(db, deviceId, session, isManual);
   if (mergedId) return { inserted: 0, merged: 1, skipped: 0 };

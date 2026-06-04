@@ -257,8 +257,13 @@ function sessionKey(session) {
 function enqueueSession(session) {
   if (!session || !session.startTime || !session.endTime) return;
   const key = sessionKey(session);
+  const range = sessionRangeMs(session);
   for (let i = 0; i < uploadQueue.length; i++) {
     if (sessionKey(uploadQueue[i]) === key) return;
+    if (range) {
+      const existingRange = sessionRangeMs(uploadQueue[i]);
+      if (existingRange && sessionsOverlapMs(existingRange, range)) return;
+    }
   }
   uploadQueue.push({
     startTime: session.startTime,
@@ -266,6 +271,17 @@ function enqueueSession(session) {
     duration: session.duration
   });
   saveQueue(uploadQueue);
+}
+
+function sessionRangeMs(session) {
+  const start = new Date(session.startTime).getTime();
+  const end = new Date(session.endTime).getTime();
+  if (isNaN(start) || isNaN(end) || end <= start) return null;
+  return { start: start, end: end };
+}
+
+function sessionsOverlapMs(a, b) {
+  return a.start < b.end && a.end > b.start;
 }
 
 function dedupeSessions(list) {
@@ -277,6 +293,61 @@ function dedupeSessions(list) {
     if (!map.has(key)) map.set(key, item);
   }
   return Array.from(map.values());
+}
+
+function dedupeSessionsOverlap(list) {
+  const exact = dedupeSessions(list);
+  const sorted = exact.slice().sort(function (a, b) {
+    return new Date(a.startTime).getTime() - new Date(b.startTime).getTime();
+  });
+  const merged = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const item = sorted[i];
+    const range = sessionRangeMs(item);
+    if (!range) continue;
+    if (!merged.length) {
+      merged.push({
+        startTime: item.startTime,
+        endTime: item.endTime,
+        duration: item.duration
+      });
+      continue;
+    }
+    const last = merged[merged.length - 1];
+    const lastRange = sessionRangeMs(last);
+    if (!lastRange || !sessionsOverlapMs(lastRange, range)) {
+      merged.push({
+        startTime: item.startTime,
+        endTime: item.endTime,
+        duration: item.duration
+      });
+      continue;
+    }
+    const unionStart = Math.min(lastRange.start, range.start);
+    const unionEnd = Math.max(lastRange.end, range.end);
+    last.startTime = new Date(unionStart).toISOString();
+    last.endTime = new Date(unionEnd).toISOString();
+    last.duration = Math.max(0, Math.floor((unionEnd - unionStart) / 1000));
+  }
+  return merged;
+}
+
+function resolveSyncCutoff(serverLast, clientLast) {
+  const candidates = [serverLast, clientLast].filter(Boolean);
+  if (!candidates.length) return null;
+  let max = null;
+  for (let i = 0; i < candidates.length; i++) {
+    const ms = new Date(candidates[i]).getTime();
+    if (isNaN(ms)) continue;
+    if (max === null || ms > max) max = ms;
+  }
+  return max === null ? null : new Date(max).toISOString();
+}
+
+function pruneQueueAfter(endCutoff) {
+  if (!endCutoff) return;
+  uploadQueue = filterSessionsAfter(uploadQueue, endCutoff);
+  saveQueue(uploadQueue);
 }
 
 /**
@@ -410,15 +481,18 @@ async function syncWithServer(reason) {
     const ready = await ensureDeviceRegistered();
     if (!ready) return;
 
-    const lastEndTime = await fetchLastServerEndTime();
-    const localCandidates = filterSessionsAfter(data.sessions || [], lastEndTime);
-    const combined = dedupeSessions(uploadQueue.concat(localCandidates));
+    const serverLastEndTime = await fetchLastServerEndTime();
+    const syncCutoff = resolveSyncCutoff(serverLastEndTime, clientState.lastServerEndTime);
+    const queueCandidates = filterSessionsAfter(uploadQueue, syncCutoff);
+    const localCandidates = filterSessionsAfter(data.sessions || [], syncCutoff);
+    const combined = dedupeSessionsOverlap(queueCandidates.concat(localCandidates));
 
     if (!combined.length) {
-      if (lastEndTime) {
-        clientState.lastServerEndTime = lastEndTime;
+      if (syncCutoff) {
+        clientState.lastServerEndTime = syncCutoff;
         clientState.lastSyncTime = nowIso();
         saveClientState(clientState);
+        pruneQueueAfter(syncCutoff);
       }
       return;
     }
@@ -445,11 +519,11 @@ async function syncWithServer(reason) {
       return;
     }
 
-    const newLastEnd = getMaxEndTime(combined, lastEndTime);
+    const newLastEnd = getMaxEndTime(combined, syncCutoff);
     clientState.lastServerEndTime = newLastEnd;
     clientState.lastSyncTime = nowIso();
     saveClientState(clientState);
-    saveQueue([]);
+    pruneQueueAfter(newLastEnd);
     log('Sync ok (' + reason + '): ' + combined.length + ' sessions');
   } catch (err) {
     log('Sync error: ' + err.message);
