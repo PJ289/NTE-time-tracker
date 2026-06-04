@@ -19,3 +19,6 @@ data/
 
 # Dev data
 dev_data/
+
+# Cursor settings
+.cursor/
