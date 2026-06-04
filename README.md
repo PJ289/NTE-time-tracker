@@ -29,6 +29,7 @@ A lightweight, automatic game time tracker for Neverness to Everness (NTE) that 
 - [Technical Details](#technical-details)
 - [File Structure](#file-structure)
 - [License](#license)
+- [Changelog](CHANGELOG.md)
 
 ---
 
@@ -299,7 +300,10 @@ Run the server in a container with SQLite data in `./data/nte.db`.
 
 **Requirements:** Docker Engine and the [Compose plugin](https://docs.docker.com/compose/install/linux/).
 
-**Published image:** [`pj289/nte-time-tracker-nte-server:latest`](https://hub.docker.com/r/pj289/nte-time-tracker-nte-server) on Docker Hub.
+**Published image:** [`pj289/nte-time-tracker-nte-server:latest`](https://hub.docker.com/r/pj289/nte-time-tracker-nte-server) on Docker Hub.  
+**Development image:** `pj289/nte-time-tracker-nte-server:dev` — built from the `dev` branch; may be unstable.
+
+> **For CI/CD maintainers:** add `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` as secrets in the GitHub repo settings so the Actions workflow can push to Docker Hub automatically.
 
 #### Quick start (recommended)
 
@@ -348,9 +352,22 @@ The entrypoint creates the directory and sets ownership for the `node` user (UID
 docker compose up --build -d
 ```
 
+#### Branches and Docker tags
+
+| Branch / trigger | Docker Hub tag | GitHub Release type |
+|-----------------|----------------|---------------------|
+| Push to `main` | `:latest` | — |
+| Push to `dev` | `:dev` | Pre-release |
+| Git tag `vX.Y.Z` on `main` | `:latest` + `:X.Y.Z` | Stable release |
+
+- **`latest`** — production-ready; use this in your `docker-compose.yml` (default).
+- **`dev`** — current development builds; may contain unreleased features or bugs. To try it: change `image:` in `docker-compose.yml` to `pj289/nte-time-tracker-nte-server:dev`, then `docker compose pull && docker compose up -d`.
+
+Images are published automatically by **GitHub Actions** (`.github/workflows/docker-publish.yml`) — no manual `docker buildx` needed for releases.
+
 #### Publish a new image (maintainers)
 
-Build and push for **amd64** (NAS/x86) and **arm64** (Apple Silicon) so `docker compose pull` works everywhere:
+Builds and pushes are handled by CI on push/tag. To publish manually for both **amd64** (NAS/x86) and **arm64** (Apple Silicon):
 
 ```bash
 docker buildx build --platform linux/amd64,linux/arm64 -t pj289/nte-time-tracker-nte-server:latest --push .

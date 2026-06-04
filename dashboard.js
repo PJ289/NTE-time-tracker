@@ -307,6 +307,33 @@ function setAdminStatus(message, isError) {
   el.style.color = isError ? "#ff8a80" : "#6fcf97";
 }
 
+function renderVersionIndicator(versionInfo) {
+  var el = document.getElementById("version-indicator");
+  if (!el) return;
+  el.textContent = "";
+
+  var label = createEl("span", "version-label");
+  label.textContent = "v" + (versionInfo && versionInfo.version ? versionInfo.version : "?");
+  el.appendChild(label);
+
+  if (versionInfo && versionInfo.updateAvailable && versionInfo.releaseUrl) {
+    var badge = document.createElement("a");
+    badge.className = "version-update-badge";
+    badge.href = versionInfo.releaseUrl;
+    badge.target = "_blank";
+    badge.rel = "noopener noreferrer";
+    badge.textContent = "\u2191 v" + versionInfo.latestVersion + " available";
+    el.appendChild(badge);
+  }
+}
+
+function fetchVersionInfo() {
+  fetch("/api/version")
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (data) { if (data) renderVersionIndicator(data); })
+    .catch(function () {});
+}
+
 var ADMIN_REQUIRED_MSG = "Admin token required. Enter and save it in the Devices tab (Admin Token).";
 
 function requireAdminAction() {
@@ -1373,6 +1400,7 @@ fetch("/data")
     calYear = now.getFullYear();
     calMonth = now.getMonth();
     applyData(normalizeData(DATA));
+    fetchVersionInfo();
 
     loadAdminToken();
     var adminInput = document.getElementById("admin-token");

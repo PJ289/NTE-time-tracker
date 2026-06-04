@@ -1338,6 +1338,43 @@ td.device-cell {
   margin-top: 2px;
 }
 
+/* ── Version Bar ───────────────────────────────────────────────── */
+
+.version-bar {
+  text-align: center;
+  padding: 0.4rem 0.5rem 0.2rem;
+  color: #444;
+  font-size: 0.7rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.version-label {
+  opacity: 0.7;
+}
+
+.version-update-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: rgba(79, 195, 100, 0.12);
+  color: #6fcf97;
+  border: 1px solid rgba(79, 195, 100, 0.3);
+  border-radius: 10px;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 0.2s;
+}
+
+.version-update-badge:hover {
+  background: rgba(79, 195, 100, 0.22);
+}
+
 /* ── Status Bar ────────────────────────────────────────────────── */
 
 .status-bar {

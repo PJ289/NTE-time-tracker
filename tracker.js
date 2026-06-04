@@ -10,6 +10,25 @@ const path = require('path');
 const http = require('http');
 const os = require('os');
 
+const APP_VERSION = (function () {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version || '0.0.0';
+  } catch (e) {
+    return '0.0.0';
+  }
+})();
+
+const GITHUB_REPO = 'PJ289/NTE-time-tracker';
+
+function semverGt(a, b) {
+  const parse = (v) => String(v).split('.').map((n) => parseInt(n, 10) || 0);
+  const [aMaj, aMin, aPatch] = parse(a);
+  const [bMaj, bMin, bPatch] = parse(b);
+  if (aMaj !== bMaj) return aMaj > bMaj;
+  if (aMin !== bMin) return aMin > bMin;
+  return aPatch > bPatch;
+}
+
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
   const raw = fs.readFileSync(filePath, 'utf8');
@@ -575,6 +594,75 @@ function showNotification(sessionSeconds, totalSeconds) {
 }
 
 /**
+ * Shows a Windows toast notification when a newer tracker version is available.
+ * Runs at most once per calendar day, stored in clientState.lastUpdateCheck.
+ */
+async function checkForUpdates() {
+  if (!IS_CLIENT_MODE && typeof fetch !== 'function') return;
+  if (typeof fetch !== 'function') return;
+  try {
+    if (!clientState) clientState = loadClientState();
+    const todayKey = new Date().toISOString().slice(0, 10);
+    if (clientState.lastUpdateCheck === todayKey) return;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    let data;
+    try {
+      const res = await fetch('https://api.github.com/repos/' + GITHUB_REPO + '/releases/latest', {
+        headers: { 'User-Agent': 'nte-time-tracker/' + APP_VERSION, 'Accept': 'application/vnd.github+json' },
+        signal: controller.signal
+      });
+      if (!res.ok) return;
+      data = await res.json();
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    const latestVersion = data && data.tag_name ? data.tag_name.replace(/^v/, '') : null;
+    if (!latestVersion) return;
+
+    clientState.lastUpdateCheck = todayKey;
+    saveClientState(clientState);
+
+    if (!semverGt(latestVersion, APP_VERSION)) return;
+
+    const releaseUrl = data.html_url || ('https://github.com/' + GITHUB_REPO + '/releases/latest');
+    log('Update available: v' + latestVersion + ' (current: v' + APP_VERSION + ')');
+
+    const ps1Path = path.join(CONFIG.dataDir, 'update-notify.ps1');
+    const ps1Content = [
+      '[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null',
+      '[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null',
+      '$template = @"',
+      '<toast>',
+      '  <visual>',
+      '    <binding template="ToastGeneric">',
+      '      <text>NTE Tracker Update Available</text>',
+      '      <text>New version: v' + latestVersion + ' (current: v' + APP_VERSION + ')</text>',
+      '      <text>' + releaseUrl + '</text>',
+      '    </binding>',
+      '  </visual>',
+      '  <audio silent="true"/>',
+      '</toast>',
+      '"@',
+      '$xml = New-Object Windows.Data.Xml.Dom.XmlDocument',
+      '$xml.LoadXml($template)',
+      '$toast = New-Object Windows.UI.Notifications.ToastNotification $xml',
+      "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('" + CONFIG.appName + "').Show($toast)"
+    ].join('\n');
+
+    fs.writeFileSync(ps1Path, ps1Content, 'utf8');
+    exec('powershell -NoProfile -ExecutionPolicy Bypass -File "' + ps1Path + '"', { windowsHide: true }, (err) => {
+      if (err) log('Update notification error: ' + err.message);
+      fs.unlink(ps1Path, () => {});
+    });
+  } catch (err) {
+    log('Update check failed: ' + err.message);
+  }
+}
+
+/**
  * Opens the dashboard in the default browser (only once per tracker run)
  */
 function openDashboard() {
@@ -950,7 +1038,7 @@ function pollProcess() {
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
-log(CONFIG.gameName + ' Tracker started');
+log(CONFIG.gameName + ' Tracker started v' + APP_VERSION);
 log('Process: ' + CONFIG.processName);
 log('Poll interval: ' + CONFIG.pollInterval + 'ms');
 log('Data file: ' + CONFIG.dataFile);
@@ -982,6 +1070,8 @@ if (syncOnly) {
 
 writePlaytimeLog();
 log('Playtime log: ' + CONFIG.playtimeFile);
+
+checkForUpdates();
 
 startServer();
 

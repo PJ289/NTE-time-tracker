@@ -7,6 +7,56 @@ const os = require("os");
 const crypto = require("crypto");
 const Database = require("better-sqlite3");
 
+const APP_VERSION = (function () {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8")).version || "0.0.0";
+  } catch (e) {
+    return "0.0.0";
+  }
+})();
+
+const GITHUB_REPO = "PJ289/NTE-time-tracker";
+let _latestVersionCache = null;
+let _latestVersionCacheAt = 0;
+const VERSION_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+async function fetchLatestRelease() {
+  if (_latestVersionCache && Date.now() - _latestVersionCacheAt < VERSION_CACHE_TTL_MS) {
+    return _latestVersionCache;
+  }
+  try {
+    const res = await fetch("https://api.github.com/repos/" + GITHUB_REPO + "/releases/latest", {
+      headers: {
+        "User-Agent": "nte-time-tracker/" + APP_VERSION,
+        "Accept": "application/vnd.github+json"
+      },
+      signal: AbortSignal.timeout(5000)
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.tag_name) return null;
+    _latestVersionCache = {
+      tag: data.tag_name,
+      version: data.tag_name.replace(/^v/, ""),
+      url: data.html_url,
+      prerelease: !!data.prerelease
+    };
+    _latestVersionCacheAt = Date.now();
+    return _latestVersionCache;
+  } catch (err) {
+    return null;
+  }
+}
+
+function semverGt(a, b) {
+  const parse = (v) => String(v).split(".").map((n) => parseInt(n, 10) || 0);
+  const [aMaj, aMin, aPatch] = parse(a);
+  const [bMaj, bMin, bPatch] = parse(b);
+  if (aMaj !== bMaj) return aMaj > bMaj;
+  if (aMin !== bMin) return aMin > bMin;
+  return aPatch > bPatch;
+}
+
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return 0;
   try {
@@ -701,6 +751,22 @@ function startServer(db) {
     if (req.method === "GET" && pathname === "/data") {
       sendJson(res, 200, getDashboardData(db));
       logRequest(req, 200, "data");
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/api/version") {
+      const latest = await fetchLatestRelease();
+      const latestVersion = latest ? latest.version : null;
+      const updateAvailable = latestVersion ? semverGt(latestVersion, APP_VERSION) : false;
+      sendJson(res, 200, {
+        version: APP_VERSION,
+        latestVersion: latestVersion,
+        latestTag: latest ? latest.tag : null,
+        updateAvailable: updateAvailable,
+        releaseUrl: latest ? latest.url : null,
+        prerelease: latest ? latest.prerelease : null
+      });
+      logRequest(req, 200, "version check");
       return;
     }
 
