@@ -1,0 +1,22 @@
+# Stops only node.exe processes running THIS project's tracker.js (by full path).
+# Does not affect other Node.js apps.
+
+$ErrorActionPreference = 'Stop'
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$trackerPath = (Join-Path $scriptDir 'tracker.js').ToLowerInvariant()
+
+$stopped = 0
+$procs = Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue
+if ($procs) {
+    foreach ($p in $procs) {
+        $cmd = $p.CommandLine
+        if (-not $cmd) { continue }
+        if ($cmd.ToLowerInvariant().Contains($trackerPath)) {
+            Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+            $stopped++
+        }
+    }
+}
+
+Write-Host "Stopped $stopped tracker process(es)."
+exit 0
