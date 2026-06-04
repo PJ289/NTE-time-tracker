@@ -2,6 +2,10 @@
 playtime.txt
 notify.ps1
 
+# SEA build artifacts
+sea-prep.blob
+nte-tracker.exe
+
 # Local secrets and dependencies
 .env
 .env.*

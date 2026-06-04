@@ -628,6 +628,14 @@ async function checkForUpdates() {
     if (!semverGt(latestVersion, APP_VERSION)) return;
 
     const releaseUrl = data.html_url || ('https://github.com/' + GITHUB_REPO + '/releases/latest');
+    const exeAsset = data.assets && data.assets.find(function (a) {
+      return a.name && a.name.toLowerCase().endsWith('.exe');
+    });
+    _pendingUpdate = {
+      version: latestVersion,
+      downloadUrl: exeAsset ? exeAsset.browser_download_url : null,
+      releaseUrl: releaseUrl
+    };
     log('Update available: v' + latestVersion + ' (current: v' + APP_VERSION + ')');
 
     const ps1Path = path.join(CONFIG.dataDir, 'update-notify.ps1');
@@ -879,6 +887,273 @@ function generateShareCard() {
   ].join('\n');
 }
 
+// ── Tray Icon (SEA / Windows) ─────────────────────────────────────────────────
+
+const IS_SEA = (function () {
+  const exe = process.execPath.toLowerCase();
+  return !exe.endsWith('node.exe') && !exe.endsWith('node') && !exe.endsWith('node.exe"');
+})();
+
+const TRAY_ENABLED = IS_SEA || envFlag('NTE_TRAY', false);
+
+const TRAY_CMD_FILE = path.join(os.tmpdir(), 'nte-tray-' + process.pid + '.cmd');
+let _trayProcess = null;
+let _trayInterval = null;
+let _pendingUpdate = null; // { version, downloadUrl, releaseUrl }
+
+function buildTrayScript() {
+  const cmdFile = TRAY_CMD_FILE.replace(/\\/g, '\\\\');
+  const exePath = process.execPath.replace(/\\/g, '\\\\');
+  const dashboardUrl = 'http://127.0.0.1:' + CONFIG.port;
+
+  return [
+    'Add-Type -AssemblyName System.Windows.Forms',
+    'Add-Type -AssemblyName System.Drawing',
+    '',
+    '$cmdFile = "' + cmdFile + '"',
+    '$dashUrl = "' + dashboardUrl + '"',
+    '',
+    '# Delete stale command file',
+    'if (Test-Path $cmdFile) { Remove-Item $cmdFile -Force }',
+    '',
+    '$tray = New-Object System.Windows.Forms.NotifyIcon',
+    '$tray.Text = "NTE Tracker v' + APP_VERSION + '"',
+    '$tray.Visible = $true',
+    '',
+    '# Icon: try to extract from the exe, fall back to system icon',
+    'try {',
+    '    $tray.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon("' + exePath + '")',
+    '} catch {',
+    '    $tray.Icon = [System.Drawing.SystemIcons]::Application',
+    '}',
+    '',
+    '$menu = New-Object System.Windows.Forms.ContextMenuStrip',
+    '',
+    'function Add-MenuItem($text, $cmd) {',
+    '    if ($text -eq "-") {',
+    '        $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null',
+    '        return',
+    '    }',
+    '    $mi = New-Object System.Windows.Forms.ToolStripMenuItem($text)',
+    '    $c = $cmd; $cf = $cmdFile',
+    '    $mi.Add_Click([scriptblock]::Create("[System.IO.File]::WriteAllText(`"$cf`", `"$c`")"))',
+    '    $menu.Items.Add($mi) | Out-Null',
+    '}',
+    '',
+    'Add-MenuItem "Open Dashboard" "open-dashboard"',
+    'Add-MenuItem "-" ""',
+    'Add-MenuItem "Edit Config (.env.client)" "edit-config"',
+    'Add-MenuItem "Check for Update" "check-update"',
+    'Add-MenuItem "-" ""',
+    'Add-MenuItem "Restart" "restart"',
+    'Add-MenuItem "Close" "close"',
+    '',
+    '$tray.ContextMenuStrip = $menu',
+    '$tray.add_DoubleClick({',
+    '    [System.IO.File]::WriteAllText($cmdFile, "open-dashboard")',
+    '})',
+    '',
+    '# Show balloon on start',
+    '$tray.ShowBalloonTip(3000, "NTE Tracker", "Running v' + APP_VERSION + ' · Right-click for options", [System.Windows.Forms.ToolTipIcon]::None)',
+    '',
+    '[System.Windows.Forms.Application]::Run()',
+    '',
+    '$tray.Visible = $false',
+    '$tray.Dispose()'
+  ].join('\r\n');
+}
+
+function startTrayIcon() {
+  if (!TRAY_ENABLED) return;
+  if (!process.platform.startsWith('win')) return;
+
+  const { spawn } = require('child_process');
+  const script = buildTrayScript();
+  _trayProcess = spawn('powershell.exe', [
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script
+  ], { windowsHide: true, stdio: 'ignore', detached: false });
+
+  _trayProcess.on('error', (err) => log('Tray error: ' + err.message));
+  _trayProcess.on('exit', (code) => {
+    if (code !== 0) log('Tray process exited with code ' + code);
+    _trayProcess = null;
+  });
+
+  _trayInterval = setInterval(pollTrayCommand, 1000);
+  log('Tray icon started');
+}
+
+function stopTrayIcon() {
+  if (_trayInterval) { clearInterval(_trayInterval); _trayInterval = null; }
+  if (_trayProcess) { try { _trayProcess.kill(); } catch (e) {} _trayProcess = null; }
+  try { if (fs.existsSync(TRAY_CMD_FILE)) fs.unlinkSync(TRAY_CMD_FILE); } catch (e) {}
+}
+
+function pollTrayCommand() {
+  try {
+    if (!fs.existsSync(TRAY_CMD_FILE)) return;
+    const cmd = fs.readFileSync(TRAY_CMD_FILE, 'utf8').trim();
+    fs.unlinkSync(TRAY_CMD_FILE);
+    if (cmd) handleTrayCommand(cmd);
+  } catch (e) {}
+}
+
+function handleTrayCommand(cmd) {
+  log('Tray command: ' + cmd);
+  switch (cmd) {
+    case 'open-dashboard':
+      dashboardOpened = false;
+      openDashboard();
+      break;
+    case 'edit-config': {
+      const cfgPath = path.join(__dirname, '.env.client');
+      if (!fs.existsSync(cfgPath)) {
+        fs.writeFileSync(cfgPath, '# NTE Tracker client config\n# NTE_SERVER_URL=http://192.168.1.10:28183\n', 'utf8');
+      }
+      exec('notepad.exe "' + cfgPath + '"', { windowsHide: false });
+      break;
+    }
+    case 'check-update':
+      clientState = clientState || loadClientState();
+      clientState.lastUpdateCheck = null;
+      saveClientState(clientState);
+      checkForUpdates().then(function () {
+        if (!_pendingUpdate) notifyTray('No updates available (v' + APP_VERSION + ' is latest)');
+      });
+      break;
+    case 'update-now':
+      if (_pendingUpdate) performAutoUpdate(_pendingUpdate);
+      break;
+    case 'restart':
+      restartTracker();
+      break;
+    case 'close':
+      handleShutdown();
+      break;
+  }
+}
+
+function notifyTray(message) {
+  if (!_trayProcess) return;
+  const ps1Path = path.join(CONFIG.dataDir, 'tray-msg.ps1');
+  const ps1 = [
+    'Add-Type -AssemblyName System.Windows.Forms',
+    '$ni = New-Object System.Windows.Forms.NotifyIcon',
+    '$ni.Icon = [System.Drawing.SystemIcons]::Information',
+    '$ni.Visible = $true',
+    '$ni.ShowBalloonTip(4000, "NTE Tracker", "' + message.replace(/"/g, "'") + '", [System.Windows.Forms.ToolTipIcon]::None)',
+    'Start-Sleep -Seconds 5',
+    '$ni.Visible = $false',
+    '$ni.Dispose()'
+  ].join('\r\n');
+  fs.writeFileSync(ps1Path, ps1, 'utf8');
+  exec('powershell -NoProfile -ExecutionPolicy Bypass -File "' + ps1Path + '"', { windowsHide: true }, () => {
+    try { fs.unlinkSync(ps1Path); } catch (e) {}
+  });
+}
+
+function restartTracker() {
+  if (!IS_SEA) {
+    log('Restart only supported when running as .exe');
+    return;
+  }
+  log('Restarting tracker...');
+  const { spawn } = require('child_process');
+  spawn(process.execPath, process.argv.slice(1), {
+    detached: true, stdio: 'ignore'
+  }).unref();
+  handleShutdown();
+}
+
+async function performAutoUpdate(updateInfo) {
+  if (!IS_SEA) {
+    log('Auto-update only supported when running as .exe. Visit: ' + updateInfo.releaseUrl);
+    exec('start ' + updateInfo.releaseUrl, { windowsHide: true, shell: true });
+    return;
+  }
+  if (!updateInfo.downloadUrl) {
+    exec('start ' + updateInfo.releaseUrl, { windowsHide: true, shell: true });
+    return;
+  }
+
+  log('Downloading update v' + updateInfo.version + '...');
+  notifyTray('Downloading update v' + updateInfo.version + '...');
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
+    let res;
+    try {
+      res = await fetch(updateInfo.downloadUrl, { signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (!res.ok) throw new Error('Download failed: ' + res.status);
+
+    const tmpExe = path.join(os.tmpdir(), 'nte-tracker-update.exe');
+    const buf = Buffer.from(await res.arrayBuffer());
+    fs.writeFileSync(tmpExe, buf);
+
+    const currentExe = process.execPath;
+    const batPath = path.join(os.tmpdir(), 'nte-update-' + Date.now() + '.bat');
+    const bat = [
+      '@echo off',
+      'timeout /t 3 /nobreak >nul',
+      'copy /y "' + tmpExe + '" "' + currentExe + '"',
+      'if errorlevel 1 (',
+      '  echo Update failed: could not replace exe',
+      '  pause',
+      '  goto :eof',
+      ')',
+      'start "" "' + currentExe + '"',
+      'del "' + tmpExe + '"',
+      'del "%~f0"'
+    ].join('\r\n');
+    fs.writeFileSync(batPath, bat, 'ascii');
+
+    log('Update downloaded. Launching helper and exiting...');
+    const { spawn } = require('child_process');
+    spawn('cmd.exe', ['/c', batPath], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    handleShutdown();
+  } catch (err) {
+    log('Auto-update failed: ' + err.message);
+    notifyTray('Update failed: ' + err.message);
+  }
+}
+
+// ── Install / Uninstall ───────────────────────────────────────────────────────
+
+function installStartupTask() {
+  const exePath = IS_SEA ? process.execPath : null;
+  const taskCmd = exePath
+    ? '"' + exePath + '"'
+    : 'wscript.exe "' + path.join(__dirname, 'launcher.vbs') + '"';
+
+  const cmds = [
+    'schtasks /create /tn "NTETracker" /tr ' + taskCmd + ' /sc onlogon /rl limited /f',
+    'powershell -NoProfile -Command "Set-ScheduledTask -TaskName NTETracker -Settings ' +
+      '(New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries)" >nul 2>&1'
+  ];
+
+  exec(cmds.join(' && '), { windowsHide: true, shell: true }, function (err) {
+    if (err) {
+      log('Install failed: ' + err.message);
+      process.exit(1);
+    }
+    log('Installed as startup task (NTETracker)');
+    log('It will start automatically at next login.');
+    process.exit(0);
+  });
+}
+
+function uninstallStartupTask() {
+  exec('schtasks /delete /tn "NTETracker" /f', { windowsHide: true, shell: true }, function (err) {
+    if (err) log('Uninstall warning: ' + err.message);
+    else log('Startup task removed (NTETracker)');
+    process.exit(0);
+  });
+}
+
 // ── HTTP Server ──────────────────────────────────────────────────────────────
 
 /**
@@ -948,6 +1223,7 @@ function startServer() {
  */
 function handleShutdown() {
   log('Shutting down gracefully...');
+  stopTrayIcon();
   broadcastSSE('shutdown', {});
 
   if (isGameRunning && sessionStartTime) {
@@ -1042,9 +1318,19 @@ log(CONFIG.gameName + ' Tracker started v' + APP_VERSION);
 log('Process: ' + CONFIG.processName);
 log('Poll interval: ' + CONFIG.pollInterval + 'ms');
 log('Data file: ' + CONFIG.dataFile);
+if (IS_SEA) log('Running as standalone .exe');
+if (TRAY_ENABLED) log('Tray icon: enabled');
 
 const args = process.argv.slice(2);
 const syncOnly = args.includes('--sync');
+
+if (args.includes('--install')) {
+  installStartupTask();
+  // installStartupTask calls process.exit — code below won't run
+}
+if (args.includes('--uninstall')) {
+  uninstallStartupTask();
+}
 
 data = loadData();
 log('Current total time: ' + formatTime(data.totalSeconds));
@@ -1074,6 +1360,7 @@ log('Playtime log: ' + CONFIG.playtimeFile);
 checkForUpdates();
 
 startServer();
+startTrayIcon();
 
 process.on('SIGTERM', handleShutdown);
 process.on('SIGINT', handleShutdown);

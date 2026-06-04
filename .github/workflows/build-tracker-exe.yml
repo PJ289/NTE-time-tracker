@@ -1,0 +1,67 @@
+name: Build Tracker EXE
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      upload_to_release:
+        description: 'Upload to latest release'
+        required: false
+        default: 'false'
+
+jobs:
+  build-exe:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Generate SEA blob
+        run: node --experimental-sea-config sea-config.json
+
+      - name: Copy node binary as base exe
+        run: |
+          $nodePath = (Get-Command node).Source
+          Copy-Item $nodePath nte-tracker.exe -Force
+        shell: pwsh
+
+      - name: Install postject
+        run: npm install -g @postject/cli 2>$null; npx --yes postject --version
+        shell: pwsh
+
+      - name: Inject SEA blob
+        run: |
+          npx postject nte-tracker.exe NODE_SEA_BLOB sea-prep.blob `
+            --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
+        shell: pwsh
+
+      - name: Verify exe
+        run: |
+          $size = (Get-Item nte-tracker.exe).Length
+          Write-Host "nte-tracker.exe size: $([math]::Round($size/1MB, 1)) MB"
+          .\nte-tracker.exe --help 2>&1 | Select-Object -First 5
+        shell: pwsh
+        continue-on-error: true
+
+      - name: Upload exe as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nte-tracker-exe
+          path: nte-tracker.exe
+          retention-days: 30
+
+      - name: Upload to GitHub Release
+        if: github.event_name == 'release' || github.event.inputs.upload_to_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: nte-tracker.exe
+          tag_name: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
