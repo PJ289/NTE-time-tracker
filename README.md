@@ -9,6 +9,9 @@ A lightweight, automatic game time tracker for Neverness to Everness (NTE) that 
 - [PC Client (Windows)](#pc-client-windows)
   - [Prerequisites](#prerequisites)
   - [Installation](#installation)
+  - [Standalone executable (`nte-tracker.exe`)](#standalone-executable-nte-trackerexe)
+  - [System tray](#system-tray)
+  - [Updates and releases](#updates-and-releases)
   - [Batch scripts (`.bat`)](#batch-scripts-bat)
   - [Configure `.env.client`](#configure-envclient)
   - [Verify the installation](#verify-the-installation)
@@ -42,6 +45,8 @@ A lightweight, automatic game time tracker for Neverness to Everness (NTE) that 
 - **Crash recovery**: Safely handles unexpected shutdowns or crashes without losing your data
 - **Zero maintenance**: Once installed, it runs automatically on login and requires no user interaction
 - **Optional server sync**: Upload sessions to a central server (PC + Android) when `NTE_SERVER_URL` is configured
+- **Standalone Windows executable**: Optional `nte-tracker.exe` build — runs without a separate Node.js install, with a system tray icon and one-click updates from GitHub Releases
+- **Update notifications**: PC client checks GitHub once per day and shows a Windows toast when a newer stable release is available
 - **Mobile-friendly dashboard (PWA)**: Install the dashboard on your phone’s home screen — works with the [server](#server-mode) and the local PC dashboard at `127.0.0.1`
 
 ## How It Works
@@ -60,7 +65,14 @@ The tracker polls every 5 seconds to check if `HTGame.exe` is running. When the 
 
 ### Prerequisites
 
-#### Install Node.js (one time)
+You can run the PC client in one of two ways:
+
+| Mode | Requires Node.js? | Best for |
+|------|-------------------|----------|
+| **Standalone `.exe`** (recommended) | No on the target PC | End users — download `nte-tracker.exe` from [GitHub Releases](https://github.com/PJ289/NTE-time-tracker/releases) |
+| **Classic `tracker.js`** | Yes | Developers, or if you edit the source locally |
+
+#### Install Node.js (classic mode only)
 
 Node.js runs the tracker in the background.
 
@@ -113,38 +125,142 @@ The tracker is now registered as a Windows scheduled task named `NTETracker` and
 
 Only if you run the [server](#server-mode) and want this PC to upload sessions → see [Configure `.env.client`](#configure-envclient).
 
+### Standalone executable (`nte-tracker.exe`)
+
+The standalone build bundles Node.js and `tracker.js` into a single file. It is the recommended install path if you do not plan to edit the source.
+
+#### Get the executable
+
+1. Open [GitHub Releases](https://github.com/PJ289/NTE-time-tracker/releases).
+2. Download **`nte-tracker.exe`** from the release you want (stable or pre-release).
+3. Place it in a permanent folder together with **`.env.client`** (optional, for server sync), for example:
+   ```
+   C:\Users\<YourName>\Documents\nte-tracker\
+   ├── nte-tracker.exe
+   └── .env.client          # optional
+   ```
+
+> **Note:** The `.exe` is built by GitHub Actions when a release is **published** — a push to `dev` or `main` updates Docker images but does **not** produce the executable automatically. See [Updates and releases](#updates-and-releases).
+
+#### Install auto-start
+
+**Option A — from the executable (recommended):**
+
+1. Open **Command Prompt as administrator** in the folder containing `nte-tracker.exe`.
+2. Run:
+   ```bat
+   nte-tracker.exe --install
+   ```
+3. Log out and back in (or run `nte-tracker.exe` once to start immediately).
+
+**Option B — using the batch helpers:**
+
+If you also have `install.bat` / `setup.bat` from the repo in the same folder, they detect `nte-tracker.exe` and call `--install` for you (same as Option A).
+
+#### Uninstall auto-start
+
+```bat
+nte-tracker.exe --uninstall
+```
+
+(or **`uninstall.bat`** as administrator — it delegates to the `.exe` when present)
+
+Playtime data in `%LOCALAPPDATA%\nte-tracker\` is kept.
+
+#### Build locally (developers)
+
+Requires **Node.js 22+** on the build machine:
+
+```powershell
+.\build-exe.ps1
+```
+
+Output: `nte-tracker.exe` in the project root. Requires `npx` (for `@postject/cli`). On Windows, the Windows SDK `signtool` helps remove the Node binary signature before injection; without it, the script warns and may still work.
+
+### System tray
+
+When running as **`nte-tracker.exe`**, a tray icon appears in the notification area (PowerShell companion process — no extra npm packages).
+
+| Action | How |
+|--------|-----|
+| Open dashboard | Double-click the icon, or **Open Dashboard** in the menu |
+| Edit server sync config | **Edit Config (.env.client)** — opens Notepad (creates the file if missing) |
+| Check for updates | **Check for Update** |
+| Restart tracker | **Restart** |
+| Exit | **Close** |
+
+To enable the tray while developing with `node tracker.js`, set in `.env.client`:
+
+```env
+NTE_TRAY=1
+```
+
+### Updates and releases
+
+#### What the client checks automatically
+
+Once per day at startup, the tracker calls GitHub's **`/releases/latest`** API and compares versions. If a **newer stable release** is available:
+
+- A **Windows toast** appears (script and `.exe` modes).
+- In **`.exe` mode**, if the release includes an **`nte-tracker.exe` asset**, the tray can download and replace the running executable automatically (via **Check for Update** when an update is pending).
+
+> **Pre-releases** (`This is a pre-release` on GitHub) are **not** returned by `/releases/latest`. To test a dev build, download `nte-tracker.exe` manually from that pre-release page.
+
+#### How releases are published (maintainers)
+
+| Trigger | Docker Hub | `nte-tracker.exe` |
+|---------|------------|-------------------|
+| Push to `dev` | `:dev` | — |
+| Push to `main` | `:latest` | — |
+| Git tag `vX.Y.Z` on `main` | `:latest` + `:X.Y.Z` | — |
+| **Publish GitHub Release** | — | Built on `windows-latest`, uploaded as release asset |
+| **Actions → Build Tracker EXE → Run workflow** | — | Artifact only (30 days); optional upload to a release |
+
+**Typical dev workflow**
+
+1. Merge or push to **`dev`** → Docker image **`pj289/nte-time-tracker-nte-server:dev`** is updated automatically.
+2. Create a **Draft release** on GitHub from `dev`, tag e.g. **`v2.2.0-dev`**, mark **Pre-release**, publish → CI attaches **`nte-tracker.exe`**.
+3. Test the downloaded `.exe` on a Windows PC.
+
+**Stable release**
+
+1. Merge `dev` → `main`, bump version in `package.json`, update `CHANGELOG.md`.
+2. Tag **`vX.Y.Z`** on `main` and publish a **normal** (non–pre-release) GitHub Release → Docker `:latest` + `:X.Y.Z`, and **`nte-tracker.exe`** for clients that use auto-update.
+
+Workflow files: `.github/workflows/docker-publish.yml`, `.github/workflows/build-tracker-exe.yml`.
+
 ### Batch scripts (`.bat`)
 
-All `.bat` files live in the **same folder** as `tracker.js` (your extracted project folder).
+All `.bat` files live in the **same folder** as `tracker.js` or `nte-tracker.exe` (your project folder).
 
 | File | Admin required? | Purpose |
 |------|-----------------|--------|
 | **`setup.bat`** | Yes | Create scheduled task + launch tracker now |
-| **`install.bat`** | Yes | Create scheduled task only (no launch) |
-| **`uninstall.bat`** | Yes | Remove scheduled task (keeps your playtime data) |
+| **`install.bat`** | Yes | Create scheduled task only (no launch). Uses `nte-tracker.exe --install` if the `.exe` is present |
+| **`uninstall.bat`** | Yes | Remove scheduled task (keeps your playtime data). Uses `nte-tracker.exe --uninstall` if present |
 | **`sync.bat`** | No | Force a one-time sync to the server (needs `.env.client` with `NTE_SERVER_URL`) |
-| **`restart.bat`** | No | Stop **only** this project's tracker and start it again (after code or `.env.client` changes) |
+| **`restart.bat`** | No | Stop this project's tracker and start again. Starts `nte-tracker.exe` if present, else `launcher.vbs` |
 
 **Typical workflow**
 
 ```
-First time on this PC     →  setup.bat (as administrator)
-Changed tracker code/env  →  restart.bat
+First time (ZIP + Node)     →  setup.bat (as administrator)
+First time (.exe)           →  nte-tracker.exe --install (as administrator)
+Changed tracker code/env    →  restart.bat
 Want sync without reinstall →  edit .env.client, then sync.bat or restart.bat
-Remove auto-start         →  uninstall.bat (as administrator)
+Remove auto-start           →  uninstall.bat or nte-tracker.exe --uninstall (as administrator)
 ```
 
-**Manual start without reinstalling:** double-click `launcher.vbs` (runs silently, no console window). If the tracker is already running, `launcher.vbs` only opens the dashboard.
+**Manual start without reinstalling:** double-click `nte-tracker.exe`, or `launcher.vbs` in classic mode (runs silently). If the tracker is already running, opening the dashboard again is enough.
 
 ### Restart the PC client (apply code or config changes)
 
-After editing `tracker.js`, `.env.client`, or other client files, run **`restart.bat`** (no administrator required):
+After editing `tracker.js`, `.env.client`, or replacing `nte-tracker.exe`, run **`restart.bat`** (no administrator required):
 
-1. Finds `node.exe` whose command line includes **this folder's** `tracker.js` (via `stop-tracker.ps1`).
-2. Stops only those processes — other Node apps are untouched.
-3. Waits one second, then starts the tracker again through `launcher.vbs`.
+1. Stops the tracker for **this folder only** (via `stop-tracker.ps1` — matches `node.exe … tracker.js` or `nte-tracker.exe` in this path).
+2. Waits one second, then starts `nte-tracker.exe` if present, otherwise `launcher.vbs`.
 
-Use this instead of ending every `node.exe` in Task Manager. Logging off also restarts the tracker if you use the scheduled task from `setup.bat` / `install.bat`.
+Use this instead of ending every `node.exe` in Task Manager. Logging off also restarts the tracker if you use the scheduled task from `setup.bat` / `install.bat` / `--install`.
 
 ### Configure `.env.client`
 
@@ -230,6 +346,7 @@ If the server already imported old local JSON as **PC (Legacy)**, use a fixed de
 | `NTE_SYNC_ON_START` | No | `1` | Sync when the tracker starts |
 | `NTE_SYNC_ON_END` | No | `1` | Sync after each gaming session |
 | `NTE_LOCAL_DASHBOARD` | No | `1` | `1` = keep local dashboard at `http://127.0.0.1:27183` |
+| `NTE_TRAY` | No | `0` | `1` = show system tray when running `node tracker.js` (always on for `nte-tracker.exe`) |
 
 Flags accept `1`, `true`, `yes`, or `y` (case-insensitive).
 
@@ -240,8 +357,9 @@ To add playtime from **before** you installed the tracker, edit `initialOffset` 
 ### Verify the installation
 
 - Dashboard loads at [http://127.0.0.1:27183](http://127.0.0.1:27183) (zero sessions before first play is normal).
-- **Task Manager** (`Ctrl + Shift + Esc`) → **Details** → look for `node.exe` running `tracker.js`.
-- Launch NTE → **NOW PLAYING** appears on the dashboard → close the game → Windows toast with session time.
+- **Task Manager** → **Details** → `nte-tracker.exe`, or `node.exe` running `tracker.js` (classic mode).
+- **`.exe` mode:** tray icon in the notification area; balloon on first start.
+- Launch NTE → **NOW PLAYING** on the dashboard → close the game → Windows toast with session time.
 
 If using server sync: open the server dashboard and confirm your PC appears under **Devices** after a session or after running `sync.bat`.
 
@@ -275,7 +393,7 @@ node tracker.js --sync
 
 ### Uninstalling
 
-1. **Right-click** `uninstall.bat` → **Run as administrator**.
+1. **Right-click** `uninstall.bat` → **Run as administrator**, **or** run `nte-tracker.exe --uninstall` as administrator.
 2. Playtime data in `%LOCALAPPDATA%\nte-tracker\` is **kept** for reinstall.
 
 ---
@@ -352,18 +470,21 @@ The entrypoint creates the directory and sets ownership for the `node` user (UID
 docker compose up --build -d
 ```
 
-#### Branches and Docker tags
+#### Branches, Docker tags, and releases
 
-| Branch / trigger | Docker Hub tag | GitHub Release type |
-|-----------------|----------------|---------------------|
-| Push to `main` | `:latest` | — |
-| Push to `dev` | `:dev` | Pre-release |
-| Git tag `vX.Y.Z` on `main` | `:latest` + `:X.Y.Z` | Stable release |
+| Branch / trigger | Docker Hub tag | GitHub Release | `nte-tracker.exe` |
+|-----------------|----------------|----------------|-------------------|
+| Push to `main` | `:latest` | — | — |
+| Push to `dev` | `:dev` | — | — |
+| Git tag `vX.Y.Z` on `main` | `:latest` + `:X.Y.Z` | Stable release | Built when release is **published** |
+| Publish pre-release on `dev` | *(already `:dev` from push)* | Pre-release | Built when release is **published** |
 
 - **`latest`** — production-ready; use this in your `docker-compose.yml` (default).
 - **`dev`** — current development builds; may contain unreleased features or bugs. To try it: change `image:` in `docker-compose.yml` to `pj289/nte-time-tracker-nte-server:dev`, then `docker compose pull && docker compose up -d`.
 
-Images are published automatically by **GitHub Actions** (`.github/workflows/docker-publish.yml`) — no manual `docker buildx` needed for releases.
+Docker images are published automatically by **GitHub Actions** (`.github/workflows/docker-publish.yml`) on push — no manual `docker buildx` needed.
+
+The **Windows executable** is built separately when you **publish a GitHub Release** (`.github/workflows/build-tracker-exe.yml`). See [Updates and releases](#updates-and-releases) for the full maintainer workflow.
 
 #### Publish a new image (maintainers)
 
@@ -596,13 +717,25 @@ Set `initialOffset` (seconds) in `tracker.js` for playtime before installing the
 
 ### Is the tracker running?
 
-**Task Manager** → **Details** → `node.exe` with `tracker.js` in the command line.
+**Task Manager** → **Details** → look for **`nte-tracker.exe`**, or **`node.exe`** with `tracker.js` in the command line (classic mode).
 
 Or:
 
 ```bash
 schtasks /query /tn "NTETracker"
 ```
+
+### Tray icon missing
+
+- **`.exe` mode:** the icon should appear within a few seconds. Check hidden icons in the taskbar overflow (^).
+- **Classic mode:** set `NTE_TRAY=1` in `.env.client` and restart.
+- A brief PowerShell window may flash on first start — that is the tray companion process.
+
+### Auto-update did not run
+
+- Auto-replace only works in **`nte-tracker.exe`** mode, not with `node tracker.js`.
+- GitHub **`/releases/latest`** ignores **pre-releases** — stable releases only trigger the daily check.
+- The release must include an asset named like **`nte-tracker.exe`**.
 
 ### Dashboard does not load
 
@@ -617,7 +750,7 @@ schtasks /query /tn "NTETracker"
 
 ### Server sync does not work
 
-- Confirm `.env.client` is in the **project folder** (next to `tracker.js`), not in AppData.
+- Confirm `.env.client` is in the **project folder** (next to `tracker.js` or `nte-tracker.exe`), not in AppData.
 - Check `NTE_SERVER_URL` (correct IP, port, no trailing slash).
 - If sync uses **HTTPS with a local self-signed cert**, Node may fail with certificate errors — use HTTP to the Node port or trust the cert on Windows ([PC sync and self-signed HTTPS](#pc-sync-and-self-signed-https)).
 - Run `sync.bat` or `node tracker.js --sync` and read console errors.
@@ -635,14 +768,14 @@ schtasks /query /tn "NTETracker"
 ### Game not detected
 
 - Process must be `HTGame.exe`.
-- Node.js must be on PATH.
-- Run `node tracker.js` and watch logs.
+- **Classic mode:** Node.js must be on PATH.
+- Run `node tracker.js` (classic) or check logs via Task Manager for `nte-tracker.exe`.
 
 ### Reset or adjust playtime
 
 1. Stop the tracker: `powershell -NoProfile -ExecutionPolicy Bypass -File stop-tracker.ps1`, or **`restart.bat`** if you will start it again right away.
 2. Edit `%LOCALAPPDATA%\nte-tracker\data.json` → `totalSeconds`.
-3. Start again via **`restart.bat`**, `launcher.vbs`, or login.
+3. Start again via **`restart.bat`**, `nte-tracker.exe`, `launcher.vbs`, or login.
 
 ---
 
@@ -663,10 +796,12 @@ schtasks /query /tn "NTETracker"
 
 - Live dashboard (Server-Sent Events)
 - PWA dashboard (manifest + service worker) for mobile home-screen install
+- Standalone `.exe` with system tray (SEA build)
+- Daily GitHub release check + Windows update toast; auto-update in `.exe` mode
 - Interim saves every 60 s while playing
 - Crash recovery on next startup
 - Last 100 sessions in local JSON
-- Silent launch via `launcher.vbs`
+- Silent launch via `launcher.vbs` (classic) or `nte-tracker.exe` (standalone)
 
 ### Default settings (`tracker.js`)
 
@@ -684,22 +819,29 @@ schtasks /query /tn "NTETracker"
 
 ```
 nte-time-tracker/
-├── tracker.js          # PC client (tracking + optional sync)
-├── server.js           # Central server (optional)
+├── tracker.js          # PC client source (tracking + optional sync)
+├── nte-tracker.exe       # Standalone PC client (build output — not in git)
+├── build-exe.ps1         # Build nte-tracker.exe locally (Node SEA)
+├── sea-config.json       # SEA configuration for build-exe.ps1
+├── server.js             # Central server (optional)
 ├── dashboard.html/css/js
 ├── manifest.webmanifest
-├── sw.js               # PWA service worker
-├── icons/              # PWA icons (192, 512)
-├── launcher.vbs        # Silent start (no console)
-├── stop-tracker.ps1    # Stop only this project's tracker (used by restart.bat)
-├── restart.bat         # Stop + start tracker (apply code/config changes)
-├── setup.bat           # Install + start now
-├── install.bat         # Install only
-├── uninstall.bat       # Remove scheduled task
-├── sync.bat            # Force server sync
-├── .env.client         # PC client config (you create this)
-├── .env.example        # Docker / server example
+├── sw.js                 # PWA service worker
+├── icons/                # PWA icons (192, 512)
+├── launcher.vbs          # Silent start — classic mode (no console)
+├── stop-tracker.ps1      # Stop only this project's tracker (used by restart.bat)
+├── restart.bat           # Stop + start tracker (apply code/config changes)
+├── setup.bat             # Install + start now
+├── install.bat           # Install only (prefers nte-tracker.exe if present)
+├── uninstall.bat         # Remove scheduled task (prefers nte-tracker.exe)
+├── sync.bat              # Force server sync
+├── .env.client           # PC client config (you create this)
+├── .env.example          # Docker / server example
 ├── docker-compose.yml
+├── CHANGELOG.md
+├── .github/workflows/
+│   ├── docker-publish.yml
+│   └── build-tracker-exe.yml
 ├── LICENSE
 ├── NOTICE
 └── README.md
