@@ -122,16 +122,28 @@ All `.bat` files live in the **same folder** as `tracker.js` (your extracted pro
 | **`install.bat`** | Yes | Create scheduled task only (no launch) |
 | **`uninstall.bat`** | Yes | Remove scheduled task (keeps your playtime data) |
 | **`sync.bat`** | No | Force a one-time sync to the server (needs `.env.client` with `NTE_SERVER_URL`) |
+| **`restart.bat`** | No | Stop **only** this project's tracker and start it again (after code or `.env.client` changes) |
 
 **Typical workflow**
 
 ```
 First time on this PC     →  setup.bat (as administrator)
-Want sync without reinstall →  edit .env.client, then sync.bat or restart tracker
+Changed tracker code/env  →  restart.bat
+Want sync without reinstall →  edit .env.client, then sync.bat or restart.bat
 Remove auto-start         →  uninstall.bat (as administrator)
 ```
 
-**Manual start without reinstalling:** double-click `launcher.vbs` (runs silently, no console window).
+**Manual start without reinstalling:** double-click `launcher.vbs` (runs silently, no console window). If the tracker is already running, `launcher.vbs` only opens the dashboard.
+
+### Restart the PC client (apply code or config changes)
+
+After editing `tracker.js`, `.env.client`, or other client files, run **`restart.bat`** (no administrator required):
+
+1. Finds `node.exe` whose command line includes **this folder's** `tracker.js` (via `stop-tracker.ps1`).
+2. Stops only those processes — other Node apps are untouched.
+3. Waits one second, then starts the tracker again through `launcher.vbs`.
+
+Use this instead of ending every `node.exe` in Task Manager. Logging off also restarts the tracker if you use the scheduled task from `setup.bat` / `install.bat`.
 
 ### Configure `.env.client`
 
@@ -154,7 +166,7 @@ The tracker reads **`.env.client` first**, then `.env` if present. Variables are
    - **Save as type:** **All Files (*.*)**
    - **Location:** the project folder (same folder as `setup.bat`)
 5. Save. If you see `env.client.txt`, the type was wrong — fix the extension.
-6. Restart the tracker: log off/on, or run `setup.bat` again, or end `node.exe` running `tracker.js` in Task Manager and double-click `launcher.vbs`.
+6. Restart the tracker: run **`restart.bat`**, or log off/on, or end the `node.exe` for this project's `tracker.js` in Task Manager and double-click `launcher.vbs`.
 
 #### Minimal template (server sync)
 
@@ -201,13 +213,13 @@ If the server already imported old local JSON as **PC (Legacy)**, use a fixed de
    NTE_DEVICE_AUTO_REGISTER=0
    ```
 
-4. Run **`sync.bat`** or restart the tracker.
+4. Run **`sync.bat`** or **`restart.bat`**.
 
 #### Client environment variables (reference)
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `NTE_SERVER_URL` | For sync | *(empty)* | Server base URL, e.g. `http://192.168.1.10:28183` (no trailing slash) |
+| `NTE_SERVER_URL` | For sync | *(empty)* | Server base URL, e.g. `http://192.168.1.10:28183` (no trailing slash). HTTPS with a public/trusted cert is fine; see [PC sync and self-signed HTTPS](#pc-sync-and-self-signed-https) for local certs |
 | `NTE_DEVICE_NAME` | No | `<hostname> (PC)` | Label shown on the server dashboard |
 | `NTE_DEVICE_TYPE` | No | `pc` | Device type sent to the server |
 | `NTE_DEVICE_ID` | No | *(auto)* | Fixed device id (use with legacy / manual linking) |
@@ -489,15 +501,20 @@ Important note: If the certificate is not trusted you need to enable "Trust any 
 
 **4. PC client sync (optional)**
 
-If the PC uploads sessions through the proxy, set:
+With a **public hostname and a trusted certificate** (Let’s Encrypt, Cloudflare, Tailscale Serve, etc.), set `NTE_SERVER_URL` to your HTTPS base URL — same as HTTP, no extra steps.
 
-```env
-NTE_SERVER_URL=https://192.168.1.10
-```
+#### PC sync and self-signed HTTPS
 
-(Node’s built-in client does not validate custom CAs by default; for a self-signed cert you may need a proper CA, use HTTP on port 28183 for sync only, or terminate TLS with a cert the PC trusts.)
+This only applies to **local / homelab** setups (e.g. Nginx on port 443 with an auto-generated cert). Browsers and Tasker can be configured to accept that cert; the **Windows tracker** uses Node `fetch`, which **rejects** self-signed TLS unless the PC trusts the certificate (there is no “continue anyway” like in Chrome).
 
-**Other HTTPS options:** Tailscale, Cloudflare Tunnel, or a real certificate (e.g. Let’s Encrypt with a public hostname) work the same way — any HTTPS URL the phone trusts is enough for PWA install.
+Typical split (recommended if you do not want to touch Windows trust stores):
+
+- **Phone / PWA:** `https://<lan-ip>/` via Nginx (Option B above).
+- **PC sync:** `NTE_SERVER_URL=http://<lan-ip>:28183` — direct to the Node server, bypassing Nginx.
+
+If you still want PC sync through HTTPS with a self-signed cert: import the `.crt` into Windows **Trusted Root Certification Authorities**, or set `NODE_EXTRA_CA_CERTS` to the cert path in `start.bat` / `sync.bat`. Avoid `NODE_TLS_REJECT_UNAUTHORIZED=0` except on isolated lab machines.
+
+**Other HTTPS options:** Tailscale, Cloudflare Tunnel, or Let’s Encrypt on a public hostname avoid this issue entirely — any HTTPS URL the client trusts works for PWA install and sync.
 
 ### PWA files (reference)
 
@@ -585,6 +602,7 @@ schtasks /query /tn "NTETracker"
 
 - Confirm `.env.client` is in the **project folder** (next to `tracker.js`), not in AppData.
 - Check `NTE_SERVER_URL` (correct IP, port, no trailing slash).
+- If sync uses **HTTPS with a local self-signed cert**, Node may fail with certificate errors — use HTTP to the Node port or trust the cert on Windows ([PC sync and self-signed HTTPS](#pc-sync-and-self-signed-https)).
 - Run `sync.bat` or `node tracker.js --sync` and read console errors.
 - On the server: verify firewall allows the port; check `docker compose logs`.
 
@@ -605,9 +623,9 @@ schtasks /query /tn "NTETracker"
 
 ### Reset or adjust playtime
 
-1. Stop the tracker (`node.exe` or uninstall scheduled task temporarily).
+1. Stop the tracker: `powershell -NoProfile -ExecutionPolicy Bypass -File stop-tracker.ps1`, or **`restart.bat`** if you will start it again right away.
 2. Edit `%LOCALAPPDATA%\nte-tracker\data.json` → `totalSeconds`.
-3. Start again via `launcher.vbs` or login.
+3. Start again via **`restart.bat`**, `launcher.vbs`, or login.
 
 ---
 
@@ -656,6 +674,8 @@ nte-time-tracker/
 ├── sw.js               # PWA service worker
 ├── icons/              # PWA icons (192, 512)
 ├── launcher.vbs        # Silent start (no console)
+├── stop-tracker.ps1    # Stop only this project's tracker (used by restart.bat)
+├── restart.bat         # Stop + start tracker (apply code/config changes)
 ├── setup.bat           # Install + start now
 ├── install.bat         # Install only
 ├── uninstall.bat       # Remove scheduled task
