@@ -515,6 +515,8 @@ Served by `server.js` and by the PC client’s built-in HTTP server when the loc
 
 See [TASKER_SETUP.md](TASKER_SETUP.md) for step-by-step Android setup.
 
+To force a one-time upload of pending sessions on the phone, open and close the NTE game (details in TASKER_SETUP.md). On Windows, use **`sync.bat`** instead.
+
 ---
 
 ## Manual sessions

@@ -33,7 +33,7 @@ This import creates the profile and both tasks. It does **not** create the serve
 
 **Recommended order:** create the device in the dashboard (Step 1), create the three global variables (Step 2), then import the profile. You can also import first and create the globals immediately afterward, as long as they exist before you test a play session.
 
-**Important:** If the globals are missing or wrong, uploads will fail, but sessions are still appended to the local queue file. After fixing the variables, open and close the game again (or run **NTE Playtime Save** manually) to retry the upload.
+**Important:** If the globals are missing or wrong, uploads will fail, but sessions are still appended to the local queue file. After fixing the variables, **open and close the game** to retry the upload (see [Manual sync](#manual-sync-retry-upload)).
 
 ## Step 1: Create the Android device in the dashboard
 
@@ -184,6 +184,19 @@ If you are building the task manually, add a **Write File** action after a succe
 - **Append**: OFF (overwrite)
 
 Tasker warns if Text is empty; using a single space clears the queue and avoids the warning.
+
+### Manual sync (retry upload)
+
+There is no separate sync task or profile in the imported project. To upload pending sessions on Android (for example after fixing `%NTE_SERVER` or credentials, or when a previous upload failed but data is still in `nte_queue.csv`):
+
+1. Open the NTE game briefly so the profile runs the entry task.
+2. Close the game so the exit task runs.
+
+On close, **NTE Playtime Save** appends the current open/close interval to the queue file and then uploads the **entire** queue to the server. Sessions that were already in the file are sent again; the server ignores duplicates and entries older than the last saved session for that device (`filtered` in the JSON response).
+
+Opening the game alone does **not** upload anything; you must close it to trigger the HTTP request.
+
+On **Windows**, use **`sync.bat`** instead (documented in [README.md](README.md)); the PC tracker does not use open/close of the game for that.
 
 ## Other settings
 
