@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [2.2.1] - 2026-06-05
+
+### Added
+- **Tray auto-start management (`.exe`)**: context menu shows **Install auto-start at login** or **Uninstall auto-start at login** depending on whether the `NTETracker` scheduled task exists; includes Yes/No confirmation and Administrator elevation (UAC) when required.
+
+### Changed
+- **`nte-tracker.exe --install` / `--uninstall`**: prints status to the console in `.exe` mode; install no longer races with normal tracker startup; successful `--install` starts the tracker in the background immediately.
+- **`install.bat`**: shows success/failure and pauses when using `nte-tracker.exe`.
+- **CI — tracker EXE workflow**: uploads `nte-tracker.exe` with `gh release upload` and explicit job `contents: write` (replaces `softprops/action-gh-release`, which failed with `Resource not accessible by integration`).
+- `package.json` version bumped to `2.2.1`.
+
+### Fixed
+- **`--install` appeared to do nothing**: maintenance commands (`--install`, `--uninstall`, `--sync`, `--install-tray`, `--uninstall-tray`) no longer fell through into full tracker startup before exiting.
+
+---
+
 ## [2.2.0] - 2026-06-05
 
 ### Added
@@ -92,6 +108,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[2.2.1]: https://github.com/PJ289/NTE-time-tracker/releases/tag/v2.2.1
 [2.2.0]: https://github.com/PJ289/NTE-time-tracker/releases/tag/v2.2.0
 [2.1.0]: https://github.com/PJ289/NTE-time-tracker/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/PJ289/NTE-time-tracker/releases/tag/v2.0.0

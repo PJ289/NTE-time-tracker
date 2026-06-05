@@ -5,6 +5,14 @@ cd /d "%~dp0"
 if exist "%~dp0nte-tracker.exe" (
     echo Installing NTE Tracker using nte-tracker.exe...
     "%~dp0nte-tracker.exe" --install
+    echo.
+    if errorlevel 1 (
+        echo Install failed. Run this window as Administrator and try again.
+    ) else (
+        echo Done. The tracker should be running in the background ^(tray icon^).
+    )
+    echo.
+    pause
 ) else (
     echo Installing NTE Tracker using launcher.vbs...
     schtasks /create /tn "NTETracker" /tr "wscript.exe \"%~dp0launcher.vbs\"" /sc onlogon /rl limited /f

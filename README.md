@@ -151,7 +151,8 @@ The standalone build bundles Node.js and `tracker.js` into a single file. It is 
    ```bat
    nte-tracker.exe --install
    ```
-3. Log out and back in (or run `nte-tracker.exe` once to start immediately).
+   You should see status lines in the console. On success, the tracker also starts in the background (tray icon). Requires **Administrator** for `schtasks`.
+3. At next login it starts automatically via the scheduled task **NTETracker**.
 
 **Option B — using the batch helpers:**
 
@@ -187,6 +188,7 @@ When running as **`nte-tracker.exe`**, a tray icon appears in the notification a
 | View tracker log | **Open Logs** — dark log viewer with auto-refresh (`%LOCALAPPDATA%\nte-tracker\tracker.log`) |
 | Edit server sync config | **Edit Config** — settings form for `.env.client` (creates the file if missing; shows Device ID/token from `client.json` when applicable) |
 | Check for updates | **Check for Update** |
+| Auto-start at login | **Install auto-start at login** / **Uninstall auto-start at login** (`.exe` only) — confirmation dialog, then Administrator prompt if needed |
 | Restart tracker | **Restart** |
 | Exit | **Close** |
 
@@ -239,7 +241,7 @@ All `.bat` files live in the **same folder** as `tracker.js` or `nte-tracker.exe
 | File | Admin required? | Purpose |
 |------|-----------------|--------|
 | **`setup.bat`** | Yes | Create scheduled task + launch tracker now |
-| **`install.bat`** | Yes | Create scheduled task only (no launch). Uses `nte-tracker.exe --install` if the `.exe` is present |
+| **`install.bat`** | Yes | Create scheduled task and start tracker (`.exe` mode). Uses `nte-tracker.exe --install` if the `.exe` is present |
 | **`uninstall.bat`** | Yes | Remove scheduled task (keeps your playtime data). Uses `nte-tracker.exe --uninstall` if present |
 | **`sync.bat`** | No | Force a one-time sync to the server (needs `.env.client` with `NTE_SERVER_URL`) |
 | **`restart.bat`** | No | Stop this project's tracker and start again. Starts `nte-tracker.exe` if present, else `launcher.vbs` |

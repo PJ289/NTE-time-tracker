@@ -85,7 +85,8 @@ function maybeRelaunchSeaInBackground() {
   if (envFlag('NTE_CONSOLE_LOG', false)) return;
 
   const args = process.argv.slice(2);
-  if (args.includes('--install') || args.includes('--uninstall') || args.includes('--sync')) return;
+  if (args.includes('--install') || args.includes('--uninstall') || args.includes('--sync') ||
+      args.includes('--install-tray') || args.includes('--uninstall-tray')) return;
 
   const childEnv = Object.assign({}, process.env, { NTE_SEA_BACKGROUND: '1' });
   spawn(process.execPath, args, {
@@ -99,6 +100,26 @@ function maybeRelaunchSeaInBackground() {
 }
 
 maybeRelaunchSeaInBackground();
+
+const CLI_ARGS = process.argv.slice(2);
+const CLI_INSTALL = CLI_ARGS.includes('--install');
+const CLI_INSTALL_TRAY = CLI_ARGS.includes('--install-tray');
+const CLI_UNINSTALL = CLI_ARGS.includes('--uninstall');
+const CLI_UNINSTALL_TRAY = CLI_ARGS.includes('--uninstall-tray');
+const CLI_SYNC_ONLY = CLI_ARGS.includes('--sync');
+const CLI_MAINTENANCE = CLI_INSTALL || CLI_INSTALL_TRAY || CLI_UNINSTALL || CLI_UNINSTALL_TRAY || CLI_SYNC_ONLY;
+
+function launchTrackerInBackground() {
+  if (!IS_SEA || !process.platform.startsWith('win')) return;
+  const childEnv = Object.assign({}, process.env, { NTE_SEA_BACKGROUND: '1' });
+  spawn(process.execPath, [], {
+    cwd: APP_ROOT,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+    env: childEnv
+  }).unref();
+}
 
 function normalizeServerUrl(url) {
   if (!url) return '';
@@ -200,7 +221,7 @@ function localDateKey(date) {
 function log(msg) {
   const timestamp = formatLocalDateTime(new Date());
   const line = '[' + timestamp + '] ' + msg;
-  const showConsole = !IS_SEA || envFlag('NTE_CONSOLE_LOG', false);
+  const showConsole = !IS_SEA || envFlag('NTE_CONSOLE_LOG', false) || CLI_MAINTENANCE;
   if (showConsole) console.log(line);
   if (IS_SEA) {
     try {
@@ -1190,7 +1211,64 @@ let _pendingUpdate = null; // { version, downloadUrl, releaseUrl }
 function buildTrayScript() {
   const cmdFile = TRAY_CMD_FILE.replace(/\\/g, '\\\\');
   const exePath = process.execPath.replace(/\\/g, '\\\\');
+  const exePathLiteral = process.execPath.replace(/'/g, "''");
   const dashboardUrl = 'http://127.0.0.1:' + CONFIG.port;
+
+  const startupMenuPs = IS_SEA ? [
+    '',
+    'function Test-StartupInstalled {',
+    '    schtasks /query /tn "NTETracker" 2>$null | Out-Null',
+    '    return ($LASTEXITCODE -eq 0)',
+    '}',
+    '',
+    '$startupItem = New-Object System.Windows.Forms.ToolStripMenuItem',
+    '$menu.Items.Add($startupItem) | Out-Null',
+    '',
+    'function Update-StartupMenuItem {',
+    '    if (Test-StartupInstalled) {',
+    '        $startupItem.Text = "Uninstall auto-start at login"',
+    '    } else {',
+    '        $startupItem.Text = "Install auto-start at login"',
+    '    }',
+    '}',
+    '',
+    '$menu.add_Opening({ Update-StartupMenuItem })',
+    '',
+    '$exeElevate = \'' + exePathLiteral + '\'',
+    '',
+    '$startupItem.Add_Click({',
+    '    if (Test-StartupInstalled) {',
+    '        $msg = "Remove NTE Tracker from automatic startup when you log in?" + [Environment]::NewLine + [Environment]::NewLine +',
+    '            "The tracker will keep running until you choose Close."',
+    '        $r = [System.Windows.Forms.MessageBox]::Show($msg, "NTE Tracker", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)',
+    '        if ($r -ne [System.Windows.Forms.DialogResult]::Yes) { return }',
+    '        try {',
+    '            $p = Start-Process -FilePath $exeElevate -ArgumentList "--uninstall-tray" -Verb RunAs -Wait -PassThru',
+    '            if ($p.ExitCode -ne 0) {',
+    '                [System.Windows.Forms.MessageBox]::Show("Could not remove auto-start. Try again as Administrator.", "NTE Tracker", "OK", "Warning") | Out-Null',
+    '            }',
+    '        } catch {',
+    '            [System.Windows.Forms.MessageBox]::Show("Administrator permission is required to change auto-start.", "NTE Tracker", "OK", "Warning") | Out-Null',
+    '        }',
+    '        Update-StartupMenuItem',
+    '    } else {',
+    '        $msg = "Install NTE Tracker to start automatically when you log in?" + [Environment]::NewLine + [Environment]::NewLine +',
+    '            "Administrator permission will be requested."',
+    '        $r = [System.Windows.Forms.MessageBox]::Show($msg, "NTE Tracker", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)',
+    '        if ($r -ne [System.Windows.Forms.DialogResult]::Yes) { return }',
+    '        try {',
+    '            $p = Start-Process -FilePath $exeElevate -ArgumentList "--install-tray" -Verb RunAs -Wait -PassThru',
+    '            if ($p.ExitCode -ne 0) {',
+    '                [System.Windows.Forms.MessageBox]::Show("Could not install auto-start. Try again as Administrator.", "NTE Tracker", "OK", "Warning") | Out-Null',
+    '            }',
+    '        } catch {',
+    '            [System.Windows.Forms.MessageBox]::Show("Administrator permission is required to install auto-start.", "NTE Tracker", "OK", "Warning") | Out-Null',
+    '        }',
+    '        Update-StartupMenuItem',
+    '    }',
+    '})',
+    ''
+  ] : [];
 
   return [
     'Add-Type -AssemblyName System.Windows.Forms',
@@ -1232,6 +1310,8 @@ function buildTrayScript() {
     'Add-MenuItem "Edit Config (.env.client)" "edit-config"',
     'Add-MenuItem "Check for Update" "check-update"',
     'Add-MenuItem "-" ""',
+  ].concat(startupMenuPs).concat([
+    'Add-MenuItem "-" ""',
     'Add-MenuItem "Restart" "restart"',
     'Add-MenuItem "Close" "close"',
     '',
@@ -1241,13 +1321,13 @@ function buildTrayScript() {
     '})',
     '',
     '# Show balloon on start',
-    '$tray.ShowBalloonTip(3000, "NTE Tracker", "Running v' + APP_VERSION + ' · Right-click for options", [System.Windows.Forms.ToolTipIcon]::None)',
+    '$tray.ShowBalloonTip(3000, "NTE Tracker", "Running v' + APP_VERSION + ' - Right-click for options", [System.Windows.Forms.ToolTipIcon]::None)',
     '',
     '[System.Windows.Forms.Application]::Run()',
     '',
     '$tray.Visible = $false',
     '$tray.Dispose()'
-  ].join('\r\n');
+  ]).join('\r\n');
 }
 
 function startTrayIcon() {
@@ -1410,7 +1490,42 @@ async function performAutoUpdate(updateInfo) {
 
 // ── Install / Uninstall ───────────────────────────────────────────────────────
 
-function installStartupTask() {
+function isStartupTaskInstalled() {
+  const { execSync } = require('child_process');
+  try {
+    execSync('schtasks /query /tn "NTETracker"', { shell: true, windowsHide: true, stdio: 'ignore' });
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+function showWindowsMessageBox(message, icon) {
+  if (!process.platform.startsWith('win')) return;
+  const { execSync } = require('child_process');
+  ensureDataDirectory();
+  const ps1Path = path.join(CONFIG.dataDir, 'msgbox.ps1');
+  const iconName = icon === 'error' ? 'Error' : icon === 'warning' ? 'Warning' : 'Information';
+  const ps1 = [
+    'Add-Type -AssemblyName System.Windows.Forms',
+    '$msg = ' + JSON.stringify(message),
+    '[void][System.Windows.Forms.MessageBox]::Show($msg, "NTE Tracker", "OK", "' + iconName + '")'
+  ].join('\r\n');
+  try {
+    fs.writeFileSync(ps1Path, ps1, 'utf8');
+    execSync('powershell -NoProfile -ExecutionPolicy Bypass -File "' + ps1Path + '"', { windowsHide: true, shell: true });
+  } catch (err) {
+    // ignore UI errors
+  }
+}
+
+function installStartupTask(options) {
+  options = options || {};
+  const exitProcess = options.exitProcess !== false;
+  const spawnBackground = !!options.spawnBackground;
+  const showDialog = !!options.showDialog;
+
+  const { execSync } = require('child_process');
   const exePath = IS_SEA ? process.execPath : null;
   const taskCmd = exePath
     ? '"' + exePath + '"'
@@ -1422,23 +1537,60 @@ function installStartupTask() {
       '(New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries)" >nul 2>&1'
   ];
 
-  exec(cmds.join(' && '), { windowsHide: true, shell: true }, function (err) {
-    if (err) {
-      log('Install failed: ' + err.message);
-      process.exit(1);
-    }
+  log('Installing NTE Tracker startup task (NTETracker)...');
+  try {
+    execSync(cmds.join(' && '), { shell: true, windowsHide: true, stdio: 'pipe' });
     log('Installed as startup task (NTETracker)');
     log('It will start automatically at next login.');
-    process.exit(0);
-  });
+    if (showDialog) {
+      showWindowsMessageBox('Auto-start installed. NTE Tracker will run when you log in.', 'info');
+    }
+    if (spawnBackground) {
+      log('Starting tracker now...');
+      launchTrackerInBackground();
+      log('Tracker started in the background. Check the tray icon in the notification area.');
+    }
+    if (exitProcess) process.exit(0);
+    return true;
+  } catch (err) {
+    const detail = err.stderr ? String(err.stderr).trim() : err.message;
+    log('Install failed: ' + detail);
+    if (showDialog) {
+      showWindowsMessageBox('Could not install auto-start.\n\n' + detail, 'error');
+    } else {
+      log('Tip: open Command Prompt as Administrator and run: nte-tracker.exe --install');
+    }
+    if (exitProcess) process.exit(1);
+    return false;
+  }
 }
 
-function uninstallStartupTask() {
-  exec('schtasks /delete /tn "NTETracker" /f', { windowsHide: true, shell: true }, function (err) {
-    if (err) log('Uninstall warning: ' + err.message);
-    else log('Startup task removed (NTETracker)');
-    process.exit(0);
-  });
+function uninstallStartupTask(options) {
+  options = options || {};
+  const exitProcess = options.exitProcess !== false;
+  const showDialog = !!options.showDialog;
+
+  const { execSync } = require('child_process');
+  log('Removing NTE Tracker startup task (NTETracker)...');
+  try {
+    execSync('schtasks /delete /tn "NTETracker" /f', { shell: true, windowsHide: true, stdio: 'pipe' });
+    log('Startup task removed (NTETracker)');
+    if (showDialog) {
+      showWindowsMessageBox('Auto-start removed. NTE Tracker will not start at login.', 'info');
+    }
+    if (exitProcess) process.exit(0);
+    return true;
+  } catch (err) {
+    const detail = err.stderr ? String(err.stderr).trim() : err.message;
+    log('Uninstall warning: ' + detail);
+    if (showDialog) {
+      showWindowsMessageBox('Could not remove auto-start.\n\n' + detail, 'warning');
+      if (exitProcess) process.exit(1);
+      return false;
+    }
+    if (exitProcess) process.exit(0);
+    return false;
+  }
 }
 
 // ── HTTP Server ──────────────────────────────────────────────────────────────
@@ -1601,57 +1753,55 @@ function pollProcess() {
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
-log(CONFIG.gameName + ' Tracker started v' + APP_VERSION);
-log('Process: ' + CONFIG.processName);
-log('Poll interval: ' + CONFIG.pollInterval + 'ms');
-log('Data file: ' + CONFIG.dataFile);
-if (IS_SEA) log('Running as standalone .exe');
-if (IS_SEA) log('Log file: ' + path.join(CONFIG.dataDir, 'tracker.log'));
-if (TRAY_ENABLED) log('Tray icon: enabled');
+if (CLI_INSTALL) {
+  installStartupTask({ exitProcess: true, spawnBackground: IS_SEA });
+} else if (CLI_INSTALL_TRAY) {
+  installStartupTask({ exitProcess: true, spawnBackground: false, showDialog: true });
+} else if (CLI_UNINSTALL) {
+  uninstallStartupTask({ exitProcess: true });
+} else if (CLI_UNINSTALL_TRAY) {
+  uninstallStartupTask({ exitProcess: true, showDialog: true });
+} else {
+  log(CONFIG.gameName + ' Tracker started v' + APP_VERSION);
+  log('Process: ' + CONFIG.processName);
+  log('Poll interval: ' + CONFIG.pollInterval + 'ms');
+  log('Data file: ' + CONFIG.dataFile);
+  if (IS_SEA) log('Running as standalone .exe');
+  if (IS_SEA) log('Log file: ' + path.join(CONFIG.dataDir, 'tracker.log'));
+  if (TRAY_ENABLED) log('Tray icon: enabled');
 
-const args = process.argv.slice(2);
-const syncOnly = args.includes('--sync');
+  data = loadData();
+  log('Current total time: ' + formatTime(data.totalSeconds));
+  log('Sessions tracked: ' + data.sessions.length);
 
-if (args.includes('--install')) {
-  installStartupTask();
-  // installStartupTask calls process.exit — code below won't run
-}
-if (args.includes('--uninstall')) {
-  uninstallStartupTask();
-}
+  if (IS_CLIENT_MODE) {
+    clientState = loadClientState();
+    uploadQueue = loadQueue();
+    if (CONFIG.syncOnStart && !CLI_SYNC_ONLY) syncWithServer('startup');
+  }
 
-data = loadData();
-log('Current total time: ' + formatTime(data.totalSeconds));
-log('Sessions tracked: ' + data.sessions.length);
-
-if (IS_CLIENT_MODE) {
-  clientState = loadClientState();
-  uploadQueue = loadQueue();
-  if (CONFIG.syncOnStart && !syncOnly) syncWithServer('startup');
-}
-
-if (syncOnly) {
-  if (!IS_CLIENT_MODE) {
-    log('Sync skipped: NTE_SERVER_URL is not set');
-    process.exit(0);
+  if (CLI_SYNC_ONLY) {
+    if (!IS_CLIENT_MODE) {
+      log('Sync skipped: NTE_SERVER_URL is not set');
+      process.exit(0);
+    } else {
+      syncWithServer('manual')
+        .then(function () { process.exit(0); })
+        .catch(function () { process.exit(1); });
+    }
   } else {
-    syncWithServer('manual')
-      .then(function () { process.exit(0); })
-      .catch(function () { process.exit(1); });
-    return;
+    writePlaytimeLog();
+    log('Playtime log: ' + CONFIG.playtimeFile);
+
+    checkForUpdates();
+
+    startServer();
+    startTrayIcon();
+
+    process.on('SIGTERM', handleShutdown);
+    process.on('SIGINT', handleShutdown);
+
+    setInterval(pollProcess, CONFIG.pollInterval);
+    log('Polling started');
   }
 }
-
-writePlaytimeLog();
-log('Playtime log: ' + CONFIG.playtimeFile);
-
-checkForUpdates();
-
-startServer();
-startTrayIcon();
-
-process.on('SIGTERM', handleShutdown);
-process.on('SIGINT', handleShutdown);
-
-setInterval(pollProcess, CONFIG.pollInterval);
-log('Polling started');
