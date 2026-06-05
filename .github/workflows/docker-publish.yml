@@ -5,6 +5,22 @@ on:
     branches:
       - main
       - dev
+    # Only build when files that are copied into the server image change.
+    paths:
+      - 'Dockerfile'
+      - 'docker-entrypoint.sh'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'server.js'
+      - 'dashboard.html'
+      - 'dashboard.css'
+      - 'dashboard.js'
+      - 'sw.js'
+      - 'manifest.webmanifest'
+      - 'favicon.ico'
+      - 'bg.png'
+      - 'icons/**'
+      - '.github/workflows/docker-publish.yml'
     tags:
       - 'v*.*.*'
   workflow_dispatch:
