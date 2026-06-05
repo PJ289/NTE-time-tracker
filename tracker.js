@@ -148,6 +148,7 @@ const CONFIG = {
   syncOnStart: envFlag('NTE_SYNC_ON_START', true),
   syncOnEnd: envFlag('NTE_SYNC_ON_END', true),
   localDashboardEnabled: envFlag('NTE_LOCAL_DASHBOARD', true),
+  updateDevBuilds: envFlag('NTE_UPDATE_DEV_BUILDS', false),
   syncTimeoutMs: Number.isNaN(rawSyncTimeout) ? 8000 : rawSyncTimeout,
   queueLimit: Number.isNaN(rawQueueLimit) ? 500 : rawQueueLimit,
   get dataDir() {
@@ -750,80 +751,229 @@ function showNotification(sessionSeconds, totalSeconds) {
   });
 }
 
+const PENDING_UPDATE_FILE = function () {
+  return path.join(CONFIG.dataDir, 'pending-update.json');
+};
+const TRAY_BALLOON_FILE = function () {
+  return path.join(CONFIG.dataDir, 'tray-balloon.txt');
+};
+
+function loadPendingUpdateFromDisk() {
+  try {
+    if (!fs.existsSync(PENDING_UPDATE_FILE())) return null;
+    const parsed = JSON.parse(fs.readFileSync(PENDING_UPDATE_FILE(), 'utf8'));
+    if (!parsed || !parsed.version) return null;
+    if (!semverGt(parsed.version, APP_VERSION)) {
+      clearPendingUpdate();
+      return null;
+    }
+    return parsed;
+  } catch (err) {
+    return null;
+  }
+}
+
+function setPendingUpdate(info) {
+  _pendingUpdate = info;
+  ensureDataDirectory();
+  fs.writeFileSync(PENDING_UPDATE_FILE(), JSON.stringify(info, null, 2), 'utf8');
+}
+
+function clearPendingUpdate() {
+  _pendingUpdate = null;
+  try {
+    if (fs.existsSync(PENDING_UPDATE_FILE())) fs.unlinkSync(PENDING_UPDATE_FILE());
+  } catch (err) {
+    // ignore
+  }
+}
+
+function signalTrayBalloon(message) {
+  if (!TRAY_ENABLED || !process.platform.startsWith('win')) return;
+  try {
+    ensureDataDirectory();
+    fs.writeFileSync(TRAY_BALLOON_FILE(), message, 'utf8');
+  } catch (err) {
+    log('Tray balloon signal failed: ' + err.message);
+  }
+}
+
+function showYesNoDialog(message) {
+  if (!process.platform.startsWith('win')) return false;
+  const { execSync } = require('child_process');
+  ensureDataDirectory();
+  const ps1Path = path.join(CONFIG.dataDir, 'yesno.ps1');
+  const ps1 = [
+    'Add-Type -AssemblyName System.Windows.Forms',
+    '$msg = ' + JSON.stringify(message),
+    '$r = [System.Windows.Forms.MessageBox]::Show($msg, "NTE Tracker", "YesNo", "Question")',
+    'if ($r -eq [System.Windows.Forms.DialogResult]::Yes) { exit 0 }',
+    'exit 1'
+  ].join('\r\n');
+  try {
+    fs.writeFileSync(ps1Path, ps1, 'utf8');
+    execSync('powershell -NoProfile -ExecutionPolicy Bypass -File "' + ps1Path + '"', { windowsHide: true, shell: true });
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+function promptInstallUpdate(updateInfo) {
+  if (!updateInfo) return;
+  const canAuto = IS_SEA && updateInfo.downloadUrl;
+  const label = updateInfo.prerelease ? 'dev pre-release ' : '';
+  const msg = canAuto
+    ? (label + 'Version v' + updateInfo.version + ' is available (current v' + APP_VERSION + ').\n\n' +
+      'Download and install now? The tracker will restart.')
+    : (label + 'Version v' + updateInfo.version + ' is available (current v' + APP_VERSION + ').\n\n' +
+      'Open the release page in your browser?');
+  if (showYesNoDialog(msg)) {
+    performAutoUpdate(updateInfo);
+  }
+}
+
+function notifyUpdateFound(updateInfo, manual) {
+  if (manual) {
+    promptInstallUpdate(updateInfo);
+    return;
+  }
+  const channel = updateInfo.prerelease ? 'dev pre-release ' : '';
+  signalTrayBalloon(
+    'Update ' + channel + 'v' + updateInfo.version + ' available (current v' + APP_VERSION + '). ' +
+    'Right-click the tray icon and choose Install update.'
+  );
+}
+
+function releaseToUpdateInfo(release) {
+  if (!release || !release.tag_name) return null;
+  const version = String(release.tag_name).replace(/^v/, '');
+  const exeAsset = release.assets && release.assets.find(function (a) {
+    return a.name && a.name.toLowerCase().endsWith('.exe');
+  });
+  return {
+    version: version,
+    downloadUrl: exeAsset ? exeAsset.browser_download_url : null,
+    releaseUrl: release.html_url || ('https://github.com/' + GITHUB_REPO + '/releases/tag/' + release.tag_name),
+    prerelease: !!release.prerelease
+  };
+}
+
 /**
- * Shows a Windows toast notification when a newer tracker version is available.
- * Runs at most once per calendar day, stored in clientState.lastUpdateCheck.
+ * Fetches the newest applicable GitHub release (stable latest, or newest pre-release when dev updates enabled).
  */
-async function checkForUpdates() {
-  if (!IS_CLIENT_MODE && typeof fetch !== 'function') return;
-  if (typeof fetch !== 'function') return;
+async function fetchLatestGithubRelease(signal) {
+  const headers = {
+    'User-Agent': 'nte-time-tracker/' + APP_VERSION,
+    'Accept': 'application/vnd.github+json'
+  };
+  const base = 'https://api.github.com/repos/' + GITHUB_REPO;
+
+  if (!CONFIG.updateDevBuilds) {
+    const res = await fetch(base + '/releases/latest', { headers: headers, signal: signal });
+    if (!res.ok) return null;
+    return releaseToUpdateInfo(await res.json());
+  }
+
+  const res = await fetch(base + '/releases?per_page=30', { headers: headers, signal: signal });
+  if (!res.ok) return null;
+  const list = await res.json();
+  if (!Array.isArray(list)) return null;
+
+  let best = null;
+  for (let i = 0; i < list.length; i++) {
+    const rel = list[i];
+    if (!rel || !rel.prerelease) continue;
+    const info = releaseToUpdateInfo(rel);
+    if (!info || !info.downloadUrl) continue;
+    if (!semverGt(info.version, APP_VERSION)) continue;
+    if (!best || semverGt(info.version, best.version)) best = info;
+  }
+  return best;
+}
+
+/**
+ * Checks GitHub releases for a newer tracker version.
+ * Stable channel uses /releases/latest; dev channel uses the newest pre-release with nte-tracker.exe.
+ * Automatic checks run at most once per calendar day (clientState.lastUpdateCheck).
+ * Returns true when a newer version is available.
+ */
+async function checkForUpdates(options) {
+  options = options || {};
+  const manual = !!options.manual;
+
+  if (typeof fetch !== 'function') {
+    if (manual) showWindowsMessageBox('Update check is not available in this environment.', 'warning');
+    return false;
+  }
+
   try {
     if (!clientState) clientState = loadClientState();
     const todayKey = localDateKey(new Date());
-    if (clientState.lastUpdateCheck === todayKey) return;
+    if (!manual && clientState.lastUpdateCheck === todayKey) {
+      const cached = loadPendingUpdateFromDisk();
+      if (cached) {
+        _pendingUpdate = cached;
+        return true;
+      }
+      return false;
+    }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-    let data;
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    let updateInfo;
     try {
-      const res = await fetch('https://api.github.com/repos/' + GITHUB_REPO + '/releases/latest', {
-        headers: { 'User-Agent': 'nte-time-tracker/' + APP_VERSION, 'Accept': 'application/vnd.github+json' },
-        signal: controller.signal
-      });
-      if (!res.ok) return;
-      data = await res.json();
+      updateInfo = await fetchLatestGithubRelease(controller.signal);
     } finally {
       clearTimeout(timeout);
     }
 
-    const latestVersion = data && data.tag_name ? data.tag_name.replace(/^v/, '') : null;
-    if (!latestVersion) return;
+    if (!updateInfo) {
+      if (manual) {
+        const hint = CONFIG.updateDevBuilds
+          ? 'No newer dev pre-release with nte-tracker.exe was found.'
+          : 'Could not read the latest stable release.';
+        showWindowsMessageBox('Update check failed. ' + hint, 'warning');
+      }
+      return false;
+    }
 
-    clientState.lastUpdateCheck = todayKey;
-    saveClientState(clientState);
+    if (!manual) {
+      clientState.lastUpdateCheck = todayKey;
+      saveClientState(clientState);
+    }
 
-    if (!semverGt(latestVersion, APP_VERSION)) return;
+    if (!semverGt(updateInfo.version, APP_VERSION)) {
+      clearPendingUpdate();
+      const channel = CONFIG.updateDevBuilds ? 'dev pre-release ' : '';
+      if (manual) {
+        showWindowsMessageBox(
+          'No updates available. You are on the latest ' + channel + 'version (v' + APP_VERSION + ').',
+          'info'
+        );
+      }
+      return false;
+    }
 
-    const releaseUrl = data.html_url || ('https://github.com/' + GITHUB_REPO + '/releases/latest');
-    const exeAsset = data.assets && data.assets.find(function (a) {
-      return a.name && a.name.toLowerCase().endsWith('.exe');
-    });
-    _pendingUpdate = {
-      version: latestVersion,
-      downloadUrl: exeAsset ? exeAsset.browser_download_url : null,
-      releaseUrl: releaseUrl
-    };
-    log('Update available: v' + latestVersion + ' (current: v' + APP_VERSION + ')');
+    if (!updateInfo.downloadUrl && CONFIG.updateDevBuilds) {
+      if (manual) {
+        showWindowsMessageBox(
+          'A newer pre-release exists (v' + updateInfo.version + ') but has no nte-tracker.exe asset yet.',
+          'warning'
+        );
+      }
+      return false;
+    }
 
-    const ps1Path = path.join(CONFIG.dataDir, 'update-notify.ps1');
-    const ps1Content = [
-      '[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null',
-      '[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null',
-      '$template = @"',
-      '<toast>',
-      '  <visual>',
-      '    <binding template="ToastGeneric">',
-      '      <text>NTE Tracker Update Available</text>',
-      '      <text>New version: v' + latestVersion + ' (current: v' + APP_VERSION + ')</text>',
-      '      <text>' + releaseUrl + '</text>',
-      '    </binding>',
-      '  </visual>',
-      '  <audio silent="true"/>',
-      '</toast>',
-      '"@',
-      '$xml = New-Object Windows.Data.Xml.Dom.XmlDocument',
-      '$xml.LoadXml($template)',
-      '$toast = New-Object Windows.UI.Notifications.ToastNotification $xml',
-      "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('" + CONFIG.appName + "').Show($toast)"
-    ].join('\n');
-
-    fs.writeFileSync(ps1Path, ps1Content, 'utf8');
-    exec('powershell -NoProfile -ExecutionPolicy Bypass -File "' + ps1Path + '"', { windowsHide: true }, (err) => {
-      if (err) log('Update notification error: ' + err.message);
-      fs.unlink(ps1Path, () => {});
-    });
+    setPendingUpdate(updateInfo);
+    const channelLabel = updateInfo.prerelease ? 'dev pre-release ' : '';
+    log('Update available: ' + channelLabel + 'v' + updateInfo.version + ' (current: v' + APP_VERSION + ')');
+    notifyUpdateFound(updateInfo, manual);
+    return true;
   } catch (err) {
     log('Update check failed: ' + err.message);
+    if (manual) showWindowsMessageBox('Update check failed: ' + err.message, 'error');
+    return false;
   }
 }
 
@@ -917,7 +1067,8 @@ function openConfigWindow() {
     'NTE_SYNC_ON_END',
     'NTE_LOCAL_DASHBOARD',
     'NTE_TRAY',
-    'NTE_CONSOLE_LOG'
+    'NTE_CONSOLE_LOG',
+    'NTE_UPDATE_DEV_BUILDS'
   ];
 
   const fields = [
@@ -934,7 +1085,8 @@ function openConfigWindow() {
     ['Sync after session', 'NTE_SYNC_ON_END', true, 'Upload after each gaming session ends. Recommended for near real-time server updates.'],
     ['Local dashboard', 'NTE_LOCAL_DASHBOARD', true, 'Keep http://127.0.0.1:27183 on this PC. Disable if you only use the remote server dashboard.'],
     ['Tray in node mode', 'NTE_TRAY', false, 'Show the tray icon when running with node tracker.js. Always enabled for nte-tracker.exe.'],
-    ['Console debug logs', 'NTE_CONSOLE_LOG', false, 'Show a console window with live output. Useful for debugging only.']
+    ['Console debug logs', 'NTE_CONSOLE_LOG', false, 'Show a console window with live output. Useful for debugging only.'],
+    ['Dev pre-release updates', 'NTE_UPDATE_DEV_BUILDS', false, 'Check GitHub pre-releases for nte-tracker.exe instead of stable /releases/latest only. Enable to auto-update from dev builds (e.g. v2.3.0-dev).']
   ];
 
   const html = [
@@ -1214,6 +1366,53 @@ function buildTrayScript() {
   const exePathLiteral = process.execPath.replace(/'/g, "''");
   const dashboardUrl = 'http://127.0.0.1:' + CONFIG.port;
 
+  const pendingFileLiteral = path.join(CONFIG.dataDir, 'pending-update.json').replace(/'/g, "''");
+  const balloonFileLiteral = path.join(CONFIG.dataDir, 'tray-balloon.txt').replace(/'/g, "''");
+
+  const updateMenuPs = [
+    '',
+    '$pendingFile = \'' + pendingFileLiteral + '\'',
+    '$balloonFile = \'' + balloonFileLiteral + '\'',
+    '',
+    '$updateItem = New-Object System.Windows.Forms.ToolStripMenuItem',
+    '$updateItem.Visible = $false',
+    '$menu.Items.Add($updateItem) | Out-Null',
+    '',
+    'function Update-UpdateMenuItem {',
+    '    if ((Test-Path $pendingFile) -and ((Get-Item $pendingFile).Length -gt 2)) {',
+    '        try {',
+    '            $u = Get-Content $pendingFile -Raw | ConvertFrom-Json',
+    '            if ($u.version) {',
+    '                if ($u.prerelease) { $updateItem.Text = "Install dev update v$($u.version)" }',
+    '                else { $updateItem.Text = "Install update v$($u.version)" }',
+    '                $updateItem.Visible = $true',
+    '                return',
+    '            }',
+    '        } catch {}',
+    '    }',
+    '    $updateItem.Visible = $false',
+    '}',
+    '',
+    '$updateItem.Add_Click({',
+    '    [System.IO.File]::WriteAllText($cmdFile, "update-now")',
+    '})',
+    '',
+    '$balloonTimer = New-Object System.Windows.Forms.Timer',
+    '$balloonTimer.Interval = 1500',
+    '$script:balloonShown = $false',
+    '$balloonTimer.Add_Tick({',
+    '    if ($script:balloonShown) { return }',
+    '    if (-not (Test-Path $balloonFile)) { return }',
+    '    $text = (Get-Content $balloonFile -Raw).Trim()',
+    '    if (-not $text) { return }',
+    '    Remove-Item $balloonFile -Force -ErrorAction SilentlyContinue',
+    '    $script:balloonShown = $true',
+    '    $tray.ShowBalloonTip(8000, "NTE Tracker", $text, [System.Windows.Forms.ToolTipIcon]::Info)',
+    '})',
+    '$balloonTimer.Start()',
+    ''
+  ];
+
   const startupMenuPs = IS_SEA ? [
     '',
     'function Test-StartupInstalled {',
@@ -1231,8 +1430,6 @@ function buildTrayScript() {
     '        $startupItem.Text = "Install auto-start at login"',
     '    }',
     '}',
-    '',
-    '$menu.add_Opening({ Update-StartupMenuItem })',
     '',
     '$exeElevate = \'' + exePathLiteral + '\'',
     '',
@@ -1309,8 +1506,14 @@ function buildTrayScript() {
     'Add-MenuItem "-" ""',
     'Add-MenuItem "Edit Config (.env.client)" "edit-config"',
     'Add-MenuItem "Check for Update" "check-update"',
+  ].concat(updateMenuPs).concat([
     'Add-MenuItem "-" ""',
-  ].concat(startupMenuPs).concat([
+  ]).concat(startupMenuPs).concat([
+    '$menu.add_Opening({',
+    '    Update-UpdateMenuItem',
+    '    if (Get-Command Update-StartupMenuItem -ErrorAction SilentlyContinue) { Update-StartupMenuItem }',
+    '})',
+    '',
     'Add-MenuItem "-" ""',
     'Add-MenuItem "Restart" "restart"',
     'Add-MenuItem "Close" "close"',
@@ -1381,15 +1584,15 @@ function handleTrayCommand(cmd) {
       break;
     }
     case 'check-update':
-      clientState = clientState || loadClientState();
-      clientState.lastUpdateCheck = null;
-      saveClientState(clientState);
-      checkForUpdates().then(function () {
-        if (!_pendingUpdate) notifyTray('No updates available (v' + APP_VERSION + ' is latest)');
-      });
+      checkForUpdates({ manual: true });
       break;
     case 'update-now':
-      if (_pendingUpdate) performAutoUpdate(_pendingUpdate);
+      _pendingUpdate = _pendingUpdate || loadPendingUpdateFromDisk();
+      if (_pendingUpdate) {
+        promptInstallUpdate(_pendingUpdate);
+      } else {
+        showWindowsMessageBox('No pending update. Use Check for Update first.', 'info');
+      }
       break;
     case 'restart':
       restartTracker();
@@ -1479,12 +1682,13 @@ async function performAutoUpdate(updateInfo) {
     fs.writeFileSync(batPath, bat, 'ascii');
 
     log('Update downloaded. Launching helper and exiting...');
+    clearPendingUpdate();
     const { spawn } = require('child_process');
     spawn('cmd.exe', ['/c', batPath], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
     handleShutdown();
   } catch (err) {
     log('Auto-update failed: ' + err.message);
-    notifyTray('Update failed: ' + err.message);
+    showWindowsMessageBox('Update failed: ' + err.message, 'error');
   }
 }
 
@@ -1793,10 +1997,11 @@ if (CLI_INSTALL) {
     writePlaytimeLog();
     log('Playtime log: ' + CONFIG.playtimeFile);
 
-    checkForUpdates();
+    _pendingUpdate = loadPendingUpdateFromDisk();
 
     startServer();
     startTrayIcon();
+    checkForUpdates();
 
     process.on('SIGTERM', handleShutdown);
     process.on('SIGINT', handleShutdown);

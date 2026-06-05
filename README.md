@@ -187,7 +187,8 @@ When running as **`nte-tracker.exe`**, a tray icon appears in the notification a
 | Open dashboard | Double-click the icon, or **Open Dashboard** in the menu |
 | View tracker log | **Open Logs** — dark log viewer with auto-refresh (`%LOCALAPPDATA%\nte-tracker\tracker.log`) |
 | Edit server sync config | **Edit Config** — settings form for `.env.client` (creates the file if missing; shows Device ID/token from `client.json` when applicable) |
-| Check for updates | **Check for Update** |
+| Check for updates | **Check for Update** — dialog to install if a newer release exists |
+| Install pending update | **Install update vX.Y.Z** — shown when an update was found (automatic or manual check) |
 | Auto-start at login | **Install auto-start at login** / **Uninstall auto-start at login** (`.exe` only) — confirmation dialog, then Administrator prompt if needed |
 | Restart tracker | **Restart** |
 | Exit | **Close** |
@@ -202,12 +203,12 @@ NTE_TRAY=1
 
 #### What the client checks automatically
 
-Once per day at startup, the tracker calls GitHub's **`/releases/latest`** API and compares versions. If a **newer stable release** is available:
+Once per day at startup, the tracker checks GitHub for a newer release. By default it uses **`/releases/latest`** (stable only). If a newer version is available:
 
-- A **Windows toast** appears (script and `.exe` modes).
-- In **`.exe` mode**, if the release includes an **`nte-tracker.exe` asset**, the tray can download and replace the running executable automatically (via **Check for Update** when an update is pending).
+- A **tray balloon** notifies you (`.exe` / tray mode).
+- In **`.exe` mode**, if the release includes an **`nte-tracker.exe` asset**, you can install from the tray (**Check for Update** or **Install update vX.Y.Z**).
 
-> **Pre-releases** (`This is a pre-release` on GitHub) are **not** returned by `/releases/latest`. To test a dev build, download `nte-tracker.exe` manually from that pre-release page.
+> **Pre-releases** are ignored unless you set **`NTE_UPDATE_DEV_BUILDS=1`** in `.env.client` (also in **Edit Config**). Then the tracker looks for the newest GitHub **pre-release** that includes `nte-tracker.exe` (e.g. `v2.3.0-dev` from a dev branch release).
 
 #### How releases are published (maintainers)
 
@@ -305,6 +306,7 @@ NTE_SERVER_URL=http://192.168.1.10:28183
 # NTE_SYNC_ON_START=1
 # NTE_SYNC_ON_END=1
 # NTE_LOCAL_DASHBOARD=1
+# NTE_UPDATE_DEV_BUILDS=0
 ```
 
 On first successful sync, credentials are saved automatically to:
@@ -353,6 +355,7 @@ If the server already imported old local JSON as **PC (Legacy)**, use a fixed de
 | `NTE_LOCAL_DASHBOARD` | No | `1` | `1` = keep local dashboard at `http://127.0.0.1:27183` |
 | `NTE_TRAY` | No | `0` | `1` = show system tray when running `node tracker.js` (always on for `nte-tracker.exe`) |
 | `NTE_CONSOLE_LOG` | No | `0` | `1` = show a console window with live log output (useful for debugging; `.exe` logs to file by default) |
+| `NTE_UPDATE_DEV_BUILDS` | No | `0` | `1` = check GitHub **pre-releases** for updates (dev builds); `0` = stable `/releases/latest` only |
 
 Flags accept `1`, `true`, `yes`, or `y` (case-insensitive).
 
@@ -741,7 +744,7 @@ schtasks /query /tn "NTETracker"
 ### Auto-update did not run
 
 - Auto-replace only works in **`nte-tracker.exe`** mode, not with `node tracker.js`.
-- GitHub **`/releases/latest`** ignores **pre-releases** — stable releases only trigger the daily check.
+- By default, only **stable** releases are checked. For **pre-releases**, set `NTE_UPDATE_DEV_BUILDS=1` in `.env.client` and restart the tracker.
 - The release must include an asset named like **`nte-tracker.exe`**.
 
 ### Dashboard does not load

@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - **Tray auto-start management (`.exe`)**: context menu shows **Install auto-start at login** or **Uninstall auto-start at login** depending on whether the `NTETracker` scheduled task exists; includes Yes/No confirmation and Administrator elevation (UAC) when required.
+- **Update notifications**: automatic checks show a tray balloon when a newer release is found; **Check for Update** opens a Yes/No dialog to install; **Install update vX.Y.Z** appears in the tray menu while an update is pending (`pending-update.json`).
+- **`NTE_UPDATE_DEV_BUILDS`**: optional `.env.client` flag to check GitHub **pre-releases** for `nte-tracker.exe` (dev builds such as `v2.3.0-dev`) instead of stable `/releases/latest` only.
 
 ### Changed
 - **`nte-tracker.exe --install` / `--uninstall`**: prints status to the console in `.exe` mode; install no longer races with normal tracker startup; successful `--install` starts the tracker in the background immediately.
@@ -19,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - **`--install` appeared to do nothing**: maintenance commands (`--install`, `--uninstall`, `--sync`, `--install-tray`, `--uninstall-tray`) no longer fell through into full tracker startup before exiting.
+- **Update check found a release but showed nothing**: Windows toast notifications were unreliable from the hidden process; replaced with tray balloon + dialog + dynamic menu item.
 
 ---
 
