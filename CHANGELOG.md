@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [2.3.0-dev] - 2026-06-05
+
+### Added
+- **Tray live status**: hover tooltip and top menu line show `Playing … | Total …` or `Idle | Total …` (updates every 2 s via `tray-status.txt`).
+- **Tray dashboard entries**: when both server URL and local dashboard are enabled, **Open Server Dashboard** and **Open Local Dashboard** appear separately.
+- **Client config (`.env.client`)**: `NTE_AUTO_OPEN_DASHBOARD` (on/off) and `NTE_AUTO_OPEN_DASHBOARD_TARGET` (`local` or `server`) control auto-open on game start.
+- **Tray time display**: `NTE_TRAY_STATUS_PERIOD` (`total`, `today`, `week`, `month`) — configurable via dropdown in Edit Config.
+- **Local dashboard UI**: `/data` includes `dashboardMode: local`; hides server-only tabs (Devices, Config), device filter, and session admin tools. Server dashboard unchanged (`dashboardMode: server`).
+
+### Changed
+- **Tray / double-click Open Dashboard** prefers the **server** URL when `NTE_SERVER_URL` is set; local remains available as its own menu item when `NTE_LOCAL_DASHBOARD=1`.
+- **Auto-open dashboard target** in Edit Config is now a dropdown (Auto / Local / Server) instead of free text.
+
+### Fixed
+- **`.exe` exited immediately** when port 27183 was already in use (e.g. another tracker instance): the process no longer calls `process.exit`; it disables the local dashboard for that session and continues with tray + sync.
+- **Silent startup failure** if hidden relaunch could not spawn a child process: the foreground process keeps running instead of exiting with an empty console flash.
+- **Open Local Dashboard** when the local server is off or port 27183 is busy: shows a warning dialog (and tray balloon) instead of opening a broken URL; startup port conflicts also notify once.
+- **Tracker closed when opening local dashboard**: binary SEA assets (favicon, icons, `bg.png`) are served as `Buffer` instead of raw `ArrayBuffer`; browser launch uses `explorer.exe` (no `cmd` window); dashboard HTTP handler errors are caught and logged instead of crashing the process.
+
+---
+
 ## [2.2.2] - 2026-06-05
 
 ### Added

@@ -673,6 +673,7 @@ function getDashboardData(db) {
   const devices = db.prepare("SELECT id, name, type, color, is_test AS isTest, created_at AS createdAt, updated_at AS updatedAt, last_seen AS lastSeen FROM devices ORDER BY created_at ASC").all();
 
   return {
+    dashboardMode: "server",
     gameName: CONFIG.gameName,
     totalSeconds: totalRow.totalSeconds || 0,
     sessions: sessions,

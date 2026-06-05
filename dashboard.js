@@ -13,6 +13,7 @@ var baseTotal, liveEpoch, liveStartISO, grouped, allSessions, timerID = null;
 var calYear, calMonth, selectedDateKey = null;
 var activeTab = "calendar", allPage = 0, DAYS_PER_PAGE = 5;
 var allDevices = [], deviceIndex = {}, adminToken = "";
+var isLocalDashboard = false;
 var filteredSessions = [], filteredTotalSeconds = 0, initialOffsetSeconds = 0;
 var selectedDeviceId = "all";
 var selectedSessionIds = {};
@@ -46,6 +47,44 @@ function saveDashboardUi() {
     }));
   } catch (err) {
     // ignore private mode / quota errors
+  }
+}
+
+function isServerDashboard() {
+  return !isLocalDashboard;
+}
+
+function applyDashboardMode() {
+  var filterBar = document.querySelector(".filter-bar");
+  if (filterBar) filterBar.style.display = isLocalDashboard ? "none" : "";
+
+  document.querySelectorAll('.tab-btn[data-tab="devices"], .tab-btn[data-tab="config"]').forEach(function (btn) {
+    btn.style.display = isLocalDashboard ? "none" : "";
+  });
+
+  var sessionTools = document.querySelector("#tab-all .session-tools");
+  if (sessionTools) sessionTools.style.display = isLocalDashboard ? "none" : "";
+
+  var manualPanel = document.querySelector("#tab-all .manual-panel");
+  if (manualPanel) manualPanel.style.display = isLocalDashboard ? "none" : "";
+
+  var banner = document.getElementById("local-dashboard-note");
+  if (isLocalDashboard) {
+    if (!banner) {
+      banner = document.createElement("div");
+      banner.id = "local-dashboard-note";
+      banner.className = "local-dashboard-note";
+      var tabBar = document.querySelector(".tab-bar");
+      if (tabBar && tabBar.parentNode) tabBar.parentNode.insertBefore(banner, tabBar);
+    }
+    banner.textContent = "Local dashboard — read-only playtime for this PC. Open the server dashboard to manage devices and sessions.";
+    banner.style.display = "";
+  } else if (banner) {
+    banner.style.display = "none";
+  }
+
+  if (isLocalDashboard && (activeTab === "devices" || activeTab === "config")) {
+    switchTab("calendar");
   }
 }
 
@@ -891,7 +930,7 @@ function renderAllSessions() {
 
   container.appendChild(buildPageNav(totalPages));
   for (var i = start; i < end; i++) {
-    container.appendChild(buildDayCard(grouped[i], true, true));
+    container.appendChild(buildDayCard(grouped[i], true, isServerDashboard()));
   }
   container.appendChild(buildPageNav(totalPages));
   updateCombineButtonState();
@@ -1457,6 +1496,7 @@ function deleteEditSession() {
 
 function switchTab(name) {
   if (VALID_DASHBOARD_TABS.indexOf(name) < 0) name = "calendar";
+  if (isLocalDashboard && (name === "devices" || name === "config")) name = "calendar";
   activeTab = name;
   document.querySelectorAll(".tab-btn").forEach(function(b) {
     b.className = b.getAttribute("data-tab") === name ? "tab-btn active" : "tab-btn";
@@ -1598,6 +1638,8 @@ function normalizeData(DATA) {
 
 function applyData(DATA) {
   DATA = normalizeData(DATA);
+  isLocalDashboard = DATA.dashboardMode === "local";
+  applyDashboardMode();
   allSessions = DATA.sessions;
   allDevices = DATA.devices || [];
   deviceIndex = buildDeviceIndex(allDevices);
@@ -1629,7 +1671,7 @@ function applyData(DATA) {
   renderCalendar();
   renderCalDayView();
   if (activeTab === "all") renderAllSessions();
-  if (activeTab === "devices") renderDevices();
+  if (activeTab === "devices" && isServerDashboard()) renderDevices();
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -1642,14 +1684,16 @@ fetch("/data")
     calMonth = now.getMonth();
     loadDashboardUiState();
     applyData(normalizeData(DATA));
-    fetchVersionInfo();
+    if (isServerDashboard()) fetchVersionInfo();
 
-    loadAdminToken();
+    if (!isLocalDashboard) {
+      loadAdminToken();
+    }
     var adminInput = document.getElementById("admin-token");
     var adminSave = document.getElementById("admin-token-save");
     var adminClear = document.getElementById("admin-token-clear");
-    if (adminInput) adminInput.value = adminToken;
-    if (adminSave) {
+    if (adminInput && !isLocalDashboard) adminInput.value = adminToken;
+    if (adminSave && !isLocalDashboard) {
       adminSave.onclick = function () {
         var value = adminInput ? adminInput.value.trim() : "";
         saveAdminToken(value);
@@ -1660,7 +1704,7 @@ fetch("/data")
         if (value) loadServerConfig();
       };
     }
-    if (adminClear) {
+    if (adminClear && !isLocalDashboard) {
       adminClear.onclick = function () {
         if (adminInput) adminInput.value = "";
         saveAdminToken("");
@@ -1673,9 +1717,9 @@ fetch("/data")
     }
 
     if (activeTab === "all") renderAllSessions();
-    if (activeTab === "devices") renderDevices();
+    if (activeTab === "devices" && isServerDashboard()) renderDevices();
 
-    if (adminToken) loadServerConfig();
+    if (!isLocalDashboard && adminToken) loadServerConfig();
 
     var createType = document.getElementById("device-create-type");
     fillDeviceTypeSelect(createType, "pc");
@@ -1686,10 +1730,10 @@ fetch("/data")
       };
     }
     var mergeBtn = document.getElementById("device-merge-btn");
-    if (mergeBtn) mergeBtn.onclick = mergeSelectedDevices;
+    if (mergeBtn && !isLocalDashboard) mergeBtn.onclick = mergeSelectedDevices;
 
     var createBtn = document.getElementById("device-create-btn");
-    if (createBtn) {
+    if (createBtn && !isLocalDashboard) {
       createBtn.onclick = function () {
         if (!requireAdminAction()) return;
         var name = document.getElementById("device-create-name");
@@ -1722,7 +1766,7 @@ fetch("/data")
     }
 
     var manualSave = document.getElementById("manual-save");
-    if (manualSave) {
+    if (manualSave && !isLocalDashboard) {
       manualSave.onclick = function () {
         if (!requireAdminAction()) return;
         var startInput = document.getElementById("manual-start");
@@ -1764,9 +1808,9 @@ fetch("/data")
     }
 
     var combineBtn = document.getElementById("combine-btn");
-    if (combineBtn) combineBtn.onclick = combineSelectedSessions;
+    if (combineBtn && !isLocalDashboard) combineBtn.onclick = combineSelectedSessions;
     var clearBtn = document.getElementById("clear-selection");
-    if (clearBtn) clearBtn.onclick = clearSelection;
+    if (clearBtn && !isLocalDashboard) clearBtn.onclick = clearSelection;
 
     updatePageSizeSelect();
     var pageSelect = document.getElementById("page-select");
@@ -1799,15 +1843,15 @@ fetch("/data")
 
     var configLoad = document.getElementById("config-load");
     var configSave = document.getElementById("config-save");
-    if (configLoad) configLoad.onclick = loadServerConfig;
-    if (configSave) configSave.onclick = saveServerConfig;
+    if (configLoad && !isLocalDashboard) configLoad.onclick = loadServerConfig;
+    if (configSave && !isLocalDashboard) configSave.onclick = saveServerConfig;
 
     var editCancel = document.getElementById("edit-cancel");
     if (editCancel) editCancel.onclick = closeEditModal;
     var editSave = document.getElementById("edit-save");
-    if (editSave) editSave.onclick = saveEditSession;
+    if (editSave && !isLocalDashboard) editSave.onclick = saveEditSession;
     var editDelete = document.getElementById("edit-delete");
-    if (editDelete) editDelete.onclick = deleteEditSession;
+    if (editDelete && !isLocalDashboard) editDelete.onclick = deleteEditSession;
     var modal = document.getElementById("session-modal");
     if (modal) {
       modal.onclick = function (event) {

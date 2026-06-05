@@ -18,13 +18,23 @@ const IS_SEA = (function () {
 /** Folder for .env.client and optional sidecar files; exe directory in SEA mode. */
 const APP_ROOT = IS_SEA ? path.dirname(process.execPath) : __dirname;
 
+function seaAssetToBuffer(raw) {
+  if (Buffer.isBuffer(raw)) return raw;
+  if (raw instanceof Uint8Array) return Buffer.from(raw);
+  if (raw instanceof ArrayBuffer) return Buffer.from(raw);
+  if (raw && raw.buffer instanceof ArrayBuffer) {
+    return Buffer.from(raw.buffer, raw.byteOffset || 0, raw.byteLength || raw.buffer.byteLength);
+  }
+  return Buffer.from(String(raw));
+}
+
 function readBundledFile(relativePath, encoding) {
   const key = relativePath.replace(/\\/g, '/');
   if (IS_SEA) {
     try {
       const { getAsset } = require('node:sea');
       if (encoding) return getAsset(key, encoding);
-      return getAsset(key);
+      return seaAssetToBuffer(getAsset(key));
     } catch (e) {
       // fall through to filesystem
     }
@@ -103,8 +113,11 @@ function maybeRelaunchSeaInBackground() {
   if (args.includes('--install') || args.includes('--uninstall') || args.includes('--sync') ||
       args.includes('--install-tray') || args.includes('--uninstall-tray')) return;
 
-  spawnHiddenSea(args);
-  process.exit(0);
+  const child = spawnHiddenSea(args);
+  if (child && child.pid) {
+    process.exit(0);
+  }
+  // If hidden relaunch failed, keep running in this process (visible console) instead of exiting silently.
 }
 
 maybeRelaunchSeaInBackground();
@@ -124,6 +137,97 @@ function launchTrackerInBackground() {
 function normalizeServerUrl(url) {
   if (!url) return '';
   return String(url).replace(/\/+$/, '');
+}
+
+function normalizeDashboardTarget(value) {
+  const v = String(value || '').trim().toLowerCase();
+  if (v === 'local' || v === 'server') return v;
+  return normalizeServerUrl(process.env.NTE_SERVER_URL) ? 'server' : 'local';
+}
+
+function normalizeTrayStatusPeriod(value) {
+  const v = String(value || 'total').trim().toLowerCase();
+  if (v === 'today' || v === 'daily' || v === 'day') return 'today';
+  if (v === 'week' || v === 'weekly') return 'week';
+  if (v === 'month' || v === 'monthly') return 'month';
+  return 'total';
+}
+
+let localDashboardRuntime = {
+  state: 'off', // off | disabled | running | port_blocked
+  portBlockedNotified: false
+};
+
+function getLocalDashboardAvailability() {
+  if (!CONFIG.localDashboardConfigured) {
+    return {
+      ok: false,
+      reason: 'disabled',
+      message: 'Local dashboard is disabled in .env.client (NTE_LOCAL_DASHBOARD=0).\n\nEnable it and restart the tracker to use http://127.0.0.1:' + CONFIG.port + '.'
+    };
+  }
+  if (localDashboardRuntime.state === 'port_blocked') {
+    return {
+      ok: false,
+      reason: 'port_blocked',
+      message: 'Local dashboard is unavailable: port ' + CONFIG.port + ' is already in use.\n\n' +
+        'Run stop-tracker.ps1 from the project folder, close other tracker instances, then Restart from the tray.\n\n' +
+        'You can still use the server dashboard from the tray.'
+    };
+  }
+  if (localDashboardRuntime.state !== 'running') {
+    return {
+      ok: false,
+      reason: 'not_running',
+      message: 'Local dashboard is not running yet.\n\nRestart the tracker or check tracker.log for errors.'
+    };
+  }
+  return {
+    ok: true,
+    url: 'http://127.0.0.1:' + CONFIG.port
+  };
+}
+
+function getLocalDashboardUrl() {
+  const avail = getLocalDashboardAvailability();
+  return avail.ok ? avail.url : null;
+}
+
+function notifyLocalDashboardUnavailable(avail) {
+  if (!avail || avail.ok) return;
+  showWindowsMessageBox(avail.message, 'warning');
+  signalTrayBalloon(avail.message.split('\n')[0]);
+}
+
+function openLocalDashboard(options) {
+  options = options || {};
+  const avail = getLocalDashboardAvailability();
+  if (!avail.ok) {
+    if (options.notify !== false) notifyLocalDashboardUnavailable(avail);
+    return false;
+  }
+  openDashboardUrl(avail.url, options);
+  return true;
+}
+
+function logPortConflictHint() {
+  exec('netstat -ano | findstr :' + CONFIG.port, { encoding: 'utf8', windowsHide: true }, function (err, stdout) {
+    if (stdout && stdout.trim()) {
+      log('Port ' + CONFIG.port + ' in use. netstat:\n' + stdout.trim());
+    }
+  });
+}
+
+function getServerDashboardUrl() {
+  return CONFIG.serverUrl || null;
+}
+
+function resolveDashboardUrl(target) {
+  const choice = normalizeDashboardTarget(target);
+  if (choice === 'local') {
+    return getLocalDashboardUrl() || getServerDashboardUrl();
+  }
+  return getServerDashboardUrl() || getLocalDashboardUrl();
 }
 
 const rawQueueLimit = parseInt(process.env.NTE_QUEUE_LIMIT || '500', 10);
@@ -147,7 +251,11 @@ const CONFIG = {
   deviceAutoRegister: envFlag('NTE_DEVICE_AUTO_REGISTER', true),
   syncOnStart: envFlag('NTE_SYNC_ON_START', true),
   syncOnEnd: envFlag('NTE_SYNC_ON_END', true),
+  localDashboardConfigured: envFlag('NTE_LOCAL_DASHBOARD', true),
   localDashboardEnabled: envFlag('NTE_LOCAL_DASHBOARD', true),
+  autoOpenDashboard: envFlag('NTE_AUTO_OPEN_DASHBOARD', true),
+  autoOpenDashboardTarget: normalizeDashboardTarget(process.env.NTE_AUTO_OPEN_DASHBOARD_TARGET),
+  trayStatusPeriod: normalizeTrayStatusPeriod(process.env.NTE_TRAY_STATUS_PERIOD),
   updateDevBuilds: envFlag('NTE_UPDATE_DEV_BUILDS', false),
   syncTimeoutMs: Number.isNaN(rawSyncTimeout) ? 8000 : rawSyncTimeout,
   queueLimit: Number.isNaN(rawQueueLimit) ? 500 : rawQueueLimit,
@@ -176,6 +284,7 @@ let tickCount = 0;
 let data = null; // loaded once, kept in memory
 let dashboardOpened = false; // whether browser was opened this tracker run
 let sseClients = []; // active SSE connections
+let localDashboardServer = null;
 let clientState = null;
 let uploadQueue = [];
 let syncInProgress = false;
@@ -1028,18 +1137,145 @@ async function checkForUpdates(options) {
   }
 }
 
-/**
- * Opens the dashboard in the default browser (only once per tracker run)
- */
-function openDashboard() {
-  if (dashboardOpened) return;
-  var url = null;
-  if (CONFIG.localDashboardEnabled) url = 'http://127.0.0.1:' + CONFIG.port;
-  else if (CONFIG.serverUrl) url = CONFIG.serverUrl;
+function formatTrayTime(seconds) {
+  const total = Math.max(0, Math.floor(seconds || 0));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  if (h > 0) return h + 'h ' + m + 'm';
+  return m + 'm';
+}
+
+function getTrayPeriodLabel(period) {
+  if (period === 'today') return 'Today';
+  if (period === 'week') return 'Week';
+  if (period === 'month') return 'Month';
+  return 'Total';
+}
+
+function getTrayPeriodStartMs(period) {
+  const now = new Date();
+  if (period === 'today') {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    return start.getTime();
+  }
+  if (period === 'week') {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+    return start.getTime();
+  }
+  if (period === 'month') {
+    return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  }
+  return 0;
+}
+
+function sumTrayPeriodSeconds(period, includeLive) {
+  if (period === 'total') {
+    const liveSec = (includeLive && isGameRunning && sessionStartTime)
+      ? Math.floor((Date.now() - sessionStartTime) / 1000)
+      : 0;
+    return data.totalSeconds + liveSec;
+  }
+
+  const startMs = getTrayPeriodStartMs(period);
+  let sum = 0;
+  for (let i = 0; i < data.sessions.length; i++) {
+    const session = data.sessions[i];
+    const st = new Date(session.startTime).getTime();
+    if (st >= startMs) sum += session.duration;
+  }
+
+  if (includeLive && isGameRunning && sessionStartTime) {
+    const overlapStart = Math.max(sessionStartTime, startMs);
+    const overlapEnd = Date.now();
+    if (overlapEnd > overlapStart) {
+      sum += Math.floor((overlapEnd - overlapStart) / 1000);
+    }
+  }
+  return sum;
+}
+
+function openExternalUrl(url) {
   if (!url) return;
-  exec('start ' + url, { windowsHide: true, shell: true });
-  dashboardOpened = true;
-  log('Opened dashboard in browser');
+  if (!process.platform.startsWith('win')) {
+    try {
+      exec('xdg-open ' + JSON.stringify(url), { windowsHide: true });
+    } catch (err) {
+      log('Open URL failed: ' + err.message);
+    }
+    return;
+  }
+  // explorer.exe opens the default browser without spawning a console-attached cmd.exe
+  const windir = process.env.WINDIR || 'C:\\Windows';
+  const explorer = path.join(windir, 'explorer.exe');
+  try {
+    const child = spawn(explorer, [url], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    });
+    child.on('error', (err) => log('Open URL failed: ' + err.message));
+    child.unref();
+  } catch (err) {
+    log('Open URL failed: ' + err.message);
+  }
+}
+
+const TRAY_STATUS_FILE = function () {
+  return path.join(CONFIG.dataDir, 'tray-status.txt');
+};
+
+function writeTrayStatus() {
+  if (!TRAY_ENABLED || !process.platform.startsWith('win')) return;
+  let line = 'NTE v' + APP_VERSION;
+  const liveSec = (isGameRunning && sessionStartTime)
+    ? Math.floor((Date.now() - sessionStartTime) / 1000)
+    : 0;
+  const period = CONFIG.trayStatusPeriod;
+  const periodLabel = getTrayPeriodLabel(period);
+  const periodSec = sumTrayPeriodSeconds(period, true);
+  if (liveSec > 0) {
+    line = 'Playing ' + formatTrayTime(liveSec) + ' | ' + periodLabel + ' ' + formatTrayTime(periodSec);
+  } else {
+    line = 'Idle | ' + periodLabel + ' ' + formatTrayTime(sumTrayPeriodSeconds(period, false));
+  }
+  if (line.length > 63) line = line.slice(0, 63);
+  try {
+    ensureDataDirectory();
+    fs.writeFileSync(TRAY_STATUS_FILE(), line, 'utf8');
+  } catch (err) {
+    // ignore tray status write errors
+  }
+}
+
+/**
+ * Opens a dashboard URL in the default browser.
+ * once: only the first auto-open per tracker run (game start).
+ */
+function openDashboardUrl(url, options) {
+  options = options || {};
+  if (!url) return;
+  if (options.once && dashboardOpened) return;
+  openExternalUrl(url);
+  if (options.once) dashboardOpened = true;
+  log('Opened dashboard: ' + url);
+}
+
+function openDashboardOnGameStart() {
+  if (!CONFIG.autoOpenDashboard) return;
+  const target = normalizeDashboardTarget(CONFIG.autoOpenDashboardTarget);
+  if (target === 'local') {
+    openLocalDashboard({ once: true, notify: true });
+    return;
+  }
+  const serverUrl = getServerDashboardUrl();
+  if (serverUrl) {
+    openDashboardUrl(serverUrl, { once: true });
+    return;
+  }
+  openLocalDashboard({ once: true, notify: true });
 }
 
 function jsLiteral(value) {
@@ -1118,6 +1354,9 @@ function openConfigWindow() {
     'NTE_SYNC_ON_START',
     'NTE_SYNC_ON_END',
     'NTE_LOCAL_DASHBOARD',
+    'NTE_AUTO_OPEN_DASHBOARD',
+    'NTE_AUTO_OPEN_DASHBOARD_TARGET',
+    'NTE_TRAY_STATUS_PERIOD',
     'NTE_TRAY',
     'NTE_CONSOLE_LOG',
     'NTE_UPDATE_DEV_BUILDS'
@@ -1130,12 +1369,26 @@ function openConfigWindow() {
     ['Device ID', 'NTE_DEVICE_ID', 'text', 'Fixed device ID from the server. If both ID and token are set here, they override client.json on restart (recommended for legacy/manual linking).'],
     ['Device token', 'NTE_DEVICE_TOKEN', 'text', 'Device token paired with Device ID. Save both fields; empty token field keeps the value loaded when the form opened. Overrides client.json on restart.']
   ];
+  const selects = [
+    ['Tray time display', 'NTE_TRAY_STATUS_PERIOD', [
+      ['Total (all time)', 'total'],
+      ['Today', 'today'],
+      ['This week (Mon-Sun)', 'week'],
+      ['This month', 'month']
+    ], 'Time range shown in the tray menu line and hover tooltip. Restart to apply.'],
+    ['Open on game start', 'NTE_AUTO_OPEN_DASHBOARD_TARGET', [
+      ['Auto (server if set, else local)', ''],
+      ['Local dashboard (this PC)', 'local'],
+      ['Server dashboard', 'server']
+    ], 'Which dashboard opens when the game starts. Requires "Open dashboard when game starts" enabled. Restart to apply.']
+  ];
   const checks = [
     ['Mark as test device', 'NTE_DEVICE_IS_TEST', false, 'Sessions appear as test data on the server. Use only for experiments.'],
     ['Auto-register device', 'NTE_DEVICE_AUTO_REGISTER', true, 'Register this PC only when Device ID and token are empty. Ignored if credentials exist in .env.client or client.json. Turn off when using a fixed device.'],
     ['Sync on startup', 'NTE_SYNC_ON_START', true, 'Upload pending sessions when the tracker starts. Recommended when server sync is enabled.'],
     ['Sync after session', 'NTE_SYNC_ON_END', true, 'Upload after each gaming session ends. Recommended for near real-time server updates.'],
-    ['Local dashboard', 'NTE_LOCAL_DASHBOARD', true, 'Keep http://127.0.0.1:27183 on this PC. Disable if you only use the remote server dashboard.'],
+    ['Local dashboard', 'NTE_LOCAL_DASHBOARD', true, 'Keep http://127.0.0.1:27183 on this PC. When server URL is also set, tray shows separate Open Server / Open Local entries.'],
+    ['Open dashboard when game starts', 'NTE_AUTO_OPEN_DASHBOARD', true, 'Open a browser tab when HTGame.exe starts. Disable to leave the browser closed until you open it from the tray.'],
     ['Tray in node mode', 'NTE_TRAY', false, 'Show the tray icon when running with node tracker.js. Always enabled for nte-tracker.exe.'],
     ['Console debug logs', 'NTE_CONSOLE_LOG', false, 'Show a console window with live output. Useful for debugging only.'],
     ['Dev pre-release updates', 'NTE_UPDATE_DEV_BUILDS', false, 'Check GitHub pre-releases for nte-tracker.exe instead of stable /releases/latest only. Enable to auto-update from dev builds (e.g. v2.3.0-dev).']
@@ -1156,8 +1409,8 @@ function openConfigWindow() {
     '.field{margin:0 0 14px 0;padding-bottom:12px;border-bottom:1px solid #222;}',
     '.row{display:flex;align-items:center;margin:0 0 4px 0;}',
     '.row label{width:180px;font-weight:600;color:#ddd;}',
-    'input[type=text],input[type=password]{flex:1;padding:7px 8px;background:#1a1a1a;color:#eee;border:1px solid #333;border-radius:4px;}',
-    'input[type=text]:focus,input[type=password]:focus{outline:none;border-color:#4db8ff;}',
+    'input[type=text],input[type=password],select{flex:1;padding:7px 8px;background:#1a1a1a;color:#eee;border:1px solid #333;border-radius:4px;}',
+    'input[type=text]:focus,input[type=password]:focus,select:focus{outline:none;border-color:#4db8ff;}',
     '.check .row{align-items:flex-start;}',
     '.check label{width:auto;font-weight:600;color:#ddd;}',
     '.help{color:#888;font-size:12px;line-height:1.45;margin:0 0 0 180px;}',
@@ -1174,6 +1427,7 @@ function openConfigWindow() {
     'var clientJsonPath=' + jsLiteral(clientJsonPath) + ';',
     'var knownKeys=' + JSON.stringify(knownKeys) + ';',
     'var fields=' + JSON.stringify(fields) + ';',
+    'var selects=' + JSON.stringify(selects) + ';',
     'var checks=' + JSON.stringify(checks) + ';',
     'var values={}; var extras=[]; var loadedCredentials={id:"",token:""};',
     'function readUtf8(path){try{var s=new ActiveXObject("ADODB.Stream");s.Type=2;s.Charset="utf-8";s.Open();s.LoadFromFile(path);var t=s.ReadText();s.Close();return t;}catch(e){return "";}}',
@@ -1182,8 +1436,8 @@ function openConfigWindow() {
     'function parseEnv(){var raw=readUtf8(cfgPath);var lines=raw.split(/\\r?\\n/);for(var i=0;i<lines.length;i++){var line=lines[i];var t=line.replace(/^\\s+|\\s+$/g,"");if(!t||t.charAt(0)==="#"||line.indexOf("=")<0){extras.push(line);continue;}var idx=line.indexOf("=");var k=line.substring(0,idx).replace(/^\\s+|\\s+$/g,"");var v=line.substring(idx+1).replace(/^\\s+|\\s+$/g,"");if(v.length>=2&&((v.charAt(0)==="\\""&&v.charAt(v.length-1)==="\\"")||(v.charAt(0)==="\\\'"&&v.charAt(v.length-1)==="\\\'")))v=v.substring(1,v.length-1);if(knownKeys.indexOf(k)>=0)values[k]=v;else extras.push(line);}}',
     'function readClientJson(){try{var raw=readUtf8(clientJsonPath);if(!raw)return null;return JSON.parse(raw);}catch(e){return null;}}',
     'function applyClientJsonFallback(){var cj=readClientJson();if(!cj)return;if(!values.NTE_DEVICE_ID&&cj.deviceId)values.NTE_DEVICE_ID=String(cj.deviceId);if(!values.NTE_DEVICE_TOKEN&&cj.deviceToken)values.NTE_DEVICE_TOKEN=String(cj.deviceToken);loadedCredentials.id=values.NTE_DEVICE_ID||"";loadedCredentials.token=values.NTE_DEVICE_TOKEN||"";}',
-    'function build(){parseEnv();applyClientJsonFallback();var root=document.getElementById("fields");for(var i=0;i<fields.length;i++){var f=fields[i];var block=document.createElement("div");block.className="field";block.innerHTML="<div class=\\"row\\"><label for=\\""+f[1]+"\\">"+f[0]+"</label><input id=\\""+f[1]+"\\" type=\\""+f[2]+"\\" /></div><div class=\\"help\\">"+f[3]+"</div>";root.appendChild(block);document.getElementById(f[1]).value=values[f[1]]||"";}var hasCreds=Boolean((values.NTE_DEVICE_ID||loadedCredentials.id)&&(values.NTE_DEVICE_TOKEN||loadedCredentials.token));for(var j=0;j<checks.length;j++){var c=checks[j];var block2=document.createElement("div");block2.className="field check";block2.innerHTML="<div class=\\"row\\"><label><input id=\\""+c[1]+"\\" type=\\"checkbox\\" /> "+c[0]+"</label></div><div class=\\"help\\">"+c[3]+"</div>";root.appendChild(block2);var checked=values.hasOwnProperty(c[1])?isTrue(values[c[1]]):c[2];if(c[1]==="NTE_DEVICE_AUTO_REGISTER"&&hasCreds)checked=false;document.getElementById(c[1]).checked=checked;}window.resizeTo(760,680);window.focus();}',
-    'function save(){var lines=["# NTE Tracker client config","# Generated by tray settings UI"];for(var i=0;i<fields.length;i++){var f=fields[i];var v=document.getElementById(f[1]).value.replace(/^\\s+|\\s+$/g,"");if(f[1]==="NTE_DEVICE_ID"&&!v&&loadedCredentials.id)v=loadedCredentials.id;if(f[1]==="NTE_DEVICE_TOKEN"&&!v&&loadedCredentials.token)v=loadedCredentials.token;if(v)lines.push(f[1]+"="+v);}var savedId=(document.getElementById("NTE_DEVICE_ID")&&document.getElementById("NTE_DEVICE_ID").value.replace(/^\\s+|\\s+$/g,""))||loadedCredentials.id;var savedTok=(document.getElementById("NTE_DEVICE_TOKEN")&&document.getElementById("NTE_DEVICE_TOKEN").value.replace(/^\\s+|\\s+$/g,""))||loadedCredentials.token;for(var j=0;j<checks.length;j++){var c=checks[j];var checked=document.getElementById(c[1]).checked;if(c[1]==="NTE_DEVICE_AUTO_REGISTER"&&savedId&&savedTok)checked=false;lines.push(c[1]+"="+(checked?"1":"0"));}lines.push("");for(var k=0;k<extras.length;k++){var line=extras[k];var t=line.replace(/^\\s+|\\s+$/g,"");if(!t||t.charAt(0)==="#"||line.indexOf("=")<0)continue;var key=line.substring(0,line.indexOf("=")).replace(/^\\s+|\\s+$/g,"");if(knownKeys.indexOf(key)<0)lines.push(line);}writeUtf8(cfgPath,lines.join("\\r\\n"));var msg="Settings saved. Restart the tracker to apply changes.";if(savedId&&savedTok)msg+="\\n\\nDevice ID/token in .env.client override client.json on restart. Auto-register is off while both are set.";alert(msg);window.close();}',
+    'function build(){parseEnv();applyClientJsonFallback();var root=document.getElementById("fields");for(var i=0;i<fields.length;i++){var f=fields[i];var block=document.createElement("div");block.className="field";block.innerHTML="<div class=\\"row\\"><label for=\\""+f[1]+"\\">"+f[0]+"</label><input id=\\""+f[1]+"\\" type=\\""+f[2]+"\\" /></div><div class=\\"help\\">"+f[3]+"</div>";root.appendChild(block);document.getElementById(f[1]).value=values[f[1]]||"";}for(var s=0;s<selects.length;s++){var sel=selects[s];var blockS=document.createElement("div");blockS.className="field";var rowS=document.createElement("div");rowS.className="row";var lblS=document.createElement("label");lblS.htmlFor=sel[1];lblS.appendChild(document.createTextNode(sel[0]));rowS.appendChild(lblS);var elS=document.createElement("select");elS.id=sel[1];for(var o=0;o<sel[2].length;o++){var opt=document.createElement("option");opt.value=sel[2][o][1];opt.appendChild(document.createTextNode(sel[2][o][0]));elS.appendChild(opt);}rowS.appendChild(elS);blockS.appendChild(rowS);var helpS=document.createElement("div");helpS.className="help";helpS.appendChild(document.createTextNode(sel[3]));blockS.appendChild(helpS);root.appendChild(blockS);var cur=values.hasOwnProperty(sel[1])?String(values[sel[1]]).toLowerCase():"";var matched="";for(var ox=0;ox<sel[2].length;ox++){if(String(sel[2][ox][1]).toLowerCase()===cur){matched=sel[2][ox][1];break;}}elS.value=matched;}var hasCreds=Boolean((values.NTE_DEVICE_ID||loadedCredentials.id)&&(values.NTE_DEVICE_TOKEN||loadedCredentials.token));for(var j=0;j<checks.length;j++){var c=checks[j];var block2=document.createElement("div");block2.className="field check";block2.innerHTML="<div class=\\"row\\"><label><input id=\\""+c[1]+"\\" type=\\"checkbox\\" /> "+c[0]+"</label></div><div class=\\"help\\">"+c[3]+"</div>";root.appendChild(block2);var checked=values.hasOwnProperty(c[1])?isTrue(values[c[1]]):c[2];if(c[1]==="NTE_DEVICE_AUTO_REGISTER"&&hasCreds)checked=false;document.getElementById(c[1]).checked=checked;}window.resizeTo(760,720);window.focus();}',
+    'function save(){var lines=["# NTE Tracker client config","# Generated by tray settings UI"];for(var i=0;i<fields.length;i++){var f=fields[i];var v=document.getElementById(f[1]).value.replace(/^\\s+|\\s+$/g,"");if(f[1]==="NTE_DEVICE_ID"&&!v&&loadedCredentials.id)v=loadedCredentials.id;if(f[1]==="NTE_DEVICE_TOKEN"&&!v&&loadedCredentials.token)v=loadedCredentials.token;if(v)lines.push(f[1]+"="+v);}for(var s=0;s<selects.length;s++){var sel=selects[s];var sv=document.getElementById(sel[1]).value.replace(/^\\s+|\\s+$/g,"");if(sel[1]==="NTE_AUTO_OPEN_DASHBOARD_TARGET"){sv=sv.toLowerCase();if(sv)lines.push(sel[1]+"="+sv);}else{lines.push(sel[1]+"="+sv);}}var savedId=(document.getElementById("NTE_DEVICE_ID")&&document.getElementById("NTE_DEVICE_ID").value.replace(/^\\s+|\\s+$/g,""))||loadedCredentials.id;var savedTok=(document.getElementById("NTE_DEVICE_TOKEN")&&document.getElementById("NTE_DEVICE_TOKEN").value.replace(/^\\s+|\\s+$/g,""))||loadedCredentials.token;for(var j=0;j<checks.length;j++){var c=checks[j];var checked=document.getElementById(c[1]).checked;if(c[1]==="NTE_DEVICE_AUTO_REGISTER"&&savedId&&savedTok)checked=false;lines.push(c[1]+"="+(checked?"1":"0"));}lines.push("");for(var k=0;k<extras.length;k++){var line=extras[k];var t=line.replace(/^\\s+|\\s+$/g,"");if(!t||t.charAt(0)==="#"||line.indexOf("=")<0)continue;var key=line.substring(0,line.indexOf("=")).replace(/^\\s+|\\s+$/g,"");if(knownKeys.indexOf(key)<0)lines.push(line);}writeUtf8(cfgPath,lines.join("\\r\\n"));var msg="Settings saved. Restart the tracker to apply changes.";if(savedId&&savedTok)msg+="\\n\\nDevice ID/token in .env.client override client.json on restart. Auto-register is off while both are set.";alert(msg);window.close();}',
     '</script>',
     '</head>',
     '<body onload="build()">',
@@ -1265,6 +1519,7 @@ function getDashboardData() {
     };
   }
   return {
+    dashboardMode: 'local',
     gameName: CONFIG.gameName,
     totalSeconds: data.totalSeconds,
     sessions: data.sessions,
@@ -1416,10 +1671,52 @@ function buildTrayScript() {
   const cmdFile = TRAY_CMD_FILE.replace(/\\/g, '\\\\');
   const exePath = process.execPath.replace(/\\/g, '\\\\');
   const exePathLiteral = process.execPath.replace(/'/g, "''");
-  const dashboardUrl = 'http://127.0.0.1:' + CONFIG.port;
+  const hasServerDash = !!CONFIG.serverUrl;
+  const hasLocalDash = CONFIG.localDashboardConfigured;
+  const statusFileLiteral = path.join(CONFIG.dataDir, 'tray-status.txt').replace(/'/g, "''");
 
   const pendingFileLiteral = path.join(CONFIG.dataDir, 'pending-update.json').replace(/'/g, "''");
   const balloonFileLiteral = path.join(CONFIG.dataDir, 'tray-balloon.txt').replace(/'/g, "''");
+
+  const dashboardMenuPs = [];
+  if (hasServerDash) {
+    dashboardMenuPs.push('Add-MenuItem "Open Server Dashboard" "open-dashboard"');
+  } else if (hasLocalDash) {
+    dashboardMenuPs.push('Add-MenuItem "Open Dashboard" "open-dashboard"');
+  }
+  if (hasLocalDash && hasServerDash) {
+    dashboardMenuPs.push('Add-MenuItem "Open Local Dashboard" "open-dashboard-local"');
+  }
+
+  const trayStatusPs = [
+    '',
+    '$statusFile = \'' + statusFileLiteral + '\'',
+    '$statusItem = New-Object System.Windows.Forms.ToolStripMenuItem',
+    '$statusItem.Enabled = $false',
+    '$menu.Items.Add($statusItem) | Out-Null',
+    '',
+    'function Update-StatusDisplay {',
+    '    if (-not (Test-Path $statusFile)) {',
+    '        $statusItem.Text = "NTE Tracker v' + APP_VERSION + '"',
+    '        $tray.Text = "NTE Tracker v' + APP_VERSION + '"',
+    '        return',
+    '    }',
+    '    try {',
+    '        $t = (Get-Content $statusFile -Raw).Trim()',
+    '        if ($t) {',
+    '            $statusItem.Text = $t',
+    '            if ($t.Length -gt 63) { $tray.Text = $t.Substring(0, 63) } else { $tray.Text = $t }',
+    '        }',
+    '    } catch {}',
+    '}',
+    '',
+    '$statusTimer = New-Object System.Windows.Forms.Timer',
+    '$statusTimer.Interval = 2000',
+    '$statusTimer.Add_Tick({ Update-StatusDisplay })',
+    '$statusTimer.Start()',
+    'Update-StatusDisplay',
+    ''
+  ];
 
   const updateMenuPs = [
     '',
@@ -1524,7 +1821,6 @@ function buildTrayScript() {
     'Add-Type -AssemblyName System.Drawing',
     '',
     '$cmdFile = "' + cmdFile + '"',
-    '$dashUrl = "' + dashboardUrl + '"',
     '',
     '# Delete stale command file',
     'if (Test-Path $cmdFile) { Remove-Item $cmdFile -Force }',
@@ -1541,7 +1837,8 @@ function buildTrayScript() {
     '}',
     '',
     '$menu = New-Object System.Windows.Forms.ContextMenuStrip',
-    '',
+    ''
+  ].concat(trayStatusPs).concat([
     'function Add-MenuItem($text, $cmd) {',
     '    if ($text -eq "-") {',
     '        $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null',
@@ -1553,15 +1850,16 @@ function buildTrayScript() {
     '    $menu.Items.Add($mi) | Out-Null',
     '}',
     '',
-    'Add-MenuItem "Open Dashboard" "open-dashboard"',
+  ]).concat(dashboardMenuPs).concat([
     'Add-MenuItem "Open Logs" "open-logs"',
     'Add-MenuItem "-" ""',
     'Add-MenuItem "Edit Config (.env.client)" "edit-config"',
-    'Add-MenuItem "Check for Update" "check-update"',
-  ].concat(updateMenuPs).concat([
-    'Add-MenuItem "-" ""',
+    'Add-MenuItem "Check for Update" "check-update"'
+  ]).concat(updateMenuPs).concat([
+    'Add-MenuItem "-" ""'
   ]).concat(startupMenuPs).concat([
     '$menu.add_Opening({',
+    '    Update-StatusDisplay',
     '    Update-UpdateMenuItem',
     '    if (Get-Command Update-StartupMenuItem -ErrorAction SilentlyContinue) { Update-StartupMenuItem }',
     '})',
@@ -1572,7 +1870,7 @@ function buildTrayScript() {
     '',
     '$tray.ContextMenuStrip = $menu',
     '$tray.add_DoubleClick({',
-    '    [System.IO.File]::WriteAllText($cmdFile, "open-dashboard")',
+    '    [System.IO.File]::WriteAllText($cmdFile, "' + (hasServerDash ? 'open-dashboard' : 'open-dashboard-local') + '")',
     '})',
     '',
     '# Show balloon on start',
@@ -1623,9 +1921,17 @@ function pollTrayCommand() {
 function handleTrayCommand(cmd) {
   log('Tray command: ' + cmd);
   switch (cmd) {
-    case 'open-dashboard':
-      dashboardOpened = false;
-      openDashboard();
+    case 'open-dashboard': {
+      const serverUrl = getServerDashboardUrl();
+      if (serverUrl) {
+        openDashboardUrl(serverUrl);
+      } else {
+        openLocalDashboard({ notify: true });
+      }
+      break;
+    }
+    case 'open-dashboard-local':
+      openLocalDashboard({ notify: true });
       break;
     case 'open-logs': {
       openLogsWindow();
@@ -1687,11 +1993,11 @@ function restartTracker() {
 async function performAutoUpdate(updateInfo) {
   if (!IS_SEA) {
     log('Auto-update only supported when running as .exe. Visit: ' + updateInfo.releaseUrl);
-    exec('start ' + updateInfo.releaseUrl, { windowsHide: true, shell: true });
+    openExternalUrl(updateInfo.releaseUrl);
     return;
   }
   if (!updateInfo.downloadUrl) {
-    exec('start ' + updateInfo.releaseUrl, { windowsHide: true, shell: true });
+    openExternalUrl(updateInfo.releaseUrl);
     return;
   }
 
@@ -1855,59 +2161,83 @@ function uninstallStartupTask(options) {
  * Starts the local HTTP server for the dashboard
  */
 function startServer() {
-  if (!CONFIG.localDashboardEnabled) {
+  if (!CONFIG.localDashboardConfigured) {
+    localDashboardRuntime.state = 'disabled';
     log('Local dashboard disabled');
     return;
   }
-  var server = http.createServer(function (req, res) {
-    // Serve static dashboard files
-    if (req.method === 'GET' && req.url in STATIC_FILES) {
-      var file = STATIC_FILES[req.url];
-      var headers = { 'Content-Type': file.type };
-      if (file.cache) headers['Cache-Control'] = file.cache;
-      res.writeHead(200, headers);
-      res.end(file.content);
-    }
-    else if (req.method === 'GET' && req.url === '/share') {
-      res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'no-cache' });
-      res.end(generateShareCard());
-    }
-    else if (req.method === 'GET' && req.url === '/data') {
-      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
-      res.end(JSON.stringify(getDashboardData()));
-    }
-    else if (req.method === 'GET' && req.url === '/events') {
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive'
-      });
-      res.write('event: init\ndata: ' + JSON.stringify(getDashboardData()) + '\n\n');
-      sseClients.push(res);
-      var removeClient = function () {
-        sseClients = sseClients.filter(function (c) { return c !== res; });
-      };
-      req.on('close', removeClient);
-      req.on('error', removeClient);
-      res.on('error', removeClient);
-    }
-    else {
+  localDashboardServer = http.createServer(function (req, res) {
+    try {
+      var urlPath = (req.url || '/').split('?')[0].split('#')[0];
+      if (req.method === 'GET' && urlPath in STATIC_FILES) {
+        var file = STATIC_FILES[urlPath];
+        if (!file || file.content == null) {
+          res.writeHead(500);
+          res.end('Missing asset');
+          return;
+        }
+        var headers = { 'Content-Type': file.type };
+        if (file.cache) headers['Cache-Control'] = file.cache;
+        res.writeHead(200, headers);
+        res.end(file.content);
+        return;
+      }
+      if (req.method === 'GET' && urlPath === '/share') {
+        res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'no-cache' });
+        res.end(generateShareCard());
+        return;
+      }
+      if (req.method === 'GET' && urlPath === '/data') {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
+        res.end(JSON.stringify(getDashboardData()));
+        return;
+      }
+      if (req.method === 'GET' && urlPath === '/events') {
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive'
+        });
+        res.write('event: init\ndata: ' + JSON.stringify(getDashboardData()) + '\n\n');
+        sseClients.push(res);
+        var removeClient = function () {
+          sseClients = sseClients.filter(function (c) { return c !== res; });
+        };
+        req.on('close', removeClient);
+        req.on('error', removeClient);
+        res.on('error', removeClient);
+        return;
+      }
       res.writeHead(404);
       res.end('Not Found');
+    } catch (err) {
+      log('Dashboard request error (' + (req && req.url) + '): ' + err.message);
+      try {
+        if (!res.headersSent) res.writeHead(500);
+        res.end('Server Error');
+      } catch (e) { /* ignore */ }
     }
   });
 
-  server.listen(CONFIG.port, '127.0.0.1', function () {
-    log('Dashboard: http://127.0.0.1:' + CONFIG.port);
-  });
-
-  server.on('error', function (err) {
+  localDashboardServer.on('error', function (err) {
     if (err.code === 'EADDRINUSE') {
-      log('Port ' + CONFIG.port + ' already in use — another instance is likely running. Exiting.');
-      process.exit(0);
-    } else {
-      log('Server error: ' + err.message);
+      localDashboardRuntime.state = 'port_blocked';
+      CONFIG.localDashboardEnabled = false;
+      log('Port ' + CONFIG.port + ' already in use — local dashboard unavailable; tracker and tray keep running.');
+      logPortConflictHint();
+      if (!localDashboardRuntime.portBlockedNotified) {
+        localDashboardRuntime.portBlockedNotified = true;
+        notifyLocalDashboardUnavailable(getLocalDashboardAvailability());
+      }
+      return;
     }
+    log('Server error: ' + err.message);
+  });
+
+  localDashboardServer.listen(CONFIG.port, '127.0.0.1', function () {
+    localDashboardRuntime.state = 'running';
+    CONFIG.localDashboardEnabled = true;
+    log('Dashboard: http://127.0.0.1:' + CONFIG.port);
   });
 }
 
@@ -1954,7 +2284,8 @@ function pollProcess() {
       tickCount = 0;
       log('Game started - session begin');
       broadcastSSE('session-start', { startTime: sessionStartTime });
-      openDashboard();
+      openDashboardOnGameStart();
+      writeTrayStatus();
     }
     // Game just stopped
     else if (!currentlyRunning && isGameRunning) {
@@ -1993,6 +2324,7 @@ function pollProcess() {
 
       sessionStartTime = null;
       tickCount = 0;
+      writeTrayStatus();
     }
     // Game still running - interim save
     else if (currentlyRunning && isGameRunning) {
@@ -2004,6 +2336,8 @@ function pollProcess() {
         tickCount = 0;
       }
     }
+
+    writeTrayStatus();
   });
 }
 
@@ -2052,12 +2386,26 @@ if (CLI_INSTALL) {
 
     _pendingUpdate = loadPendingUpdateFromDisk();
 
+    if (process.platform === 'win32' && process.stdin.isTTY) {
+      try {
+        require('readline').createInterface({ input: process.stdin, output: process.stdout });
+      } catch (e) { /* ignore */ }
+    }
+
     startServer();
     startTrayIcon();
+    writeTrayStatus();
     checkForUpdates();
 
     process.on('SIGTERM', handleShutdown);
     process.on('SIGINT', handleShutdown);
+    process.on('uncaughtException', function (err) {
+      log('Uncaught exception: ' + (err && err.stack ? err.stack : err));
+    });
+    process.on('unhandledRejection', function (reason) {
+      const detail = reason && reason.stack ? reason.stack : String(reason);
+      log('Unhandled rejection: ' + detail);
+    });
 
     setInterval(pollProcess, CONFIG.pollInterval);
     log('Polling started');
