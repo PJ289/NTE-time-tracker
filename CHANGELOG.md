@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - **Sync failure tray notifications (`.exe`)**: connection errors, auth failures (401), registration failures, and session upload errors show a tray balloon (same channel as update notices; 5-minute cooldown per error type to avoid spam).
+- **Merge devices (dashboard)**: admin API `POST /api/devices/merge` and Devices tab UI to move all sessions from one or more source devices into a selected target device, then delete the sources. Exact duplicate sessions on the target are dropped.
 
 ### Changed
 - **Auto-register policy (`.exe` / `tracker.js`)**: auto-register runs only when Device ID and token are both missing. Existing credentials in `client.json` or a full pair in `.env.client` skip registration; `.env.client` credentials also disable the auto-register flag at runtime.

@@ -311,6 +311,17 @@ function buildDeviceIndex(devices) {
   return map;
 }
 
+function getDeviceSessionCounts() {
+  var counts = {};
+  var sessions = (DATA && DATA.sessions) || [];
+  for (var i = 0; i < sessions.length; i++) {
+    var id = sessions[i].deviceId;
+    if (!id) continue;
+    counts[id] = (counts[id] || 0) + 1;
+  }
+  return counts;
+}
+
 function parseBool(value) {
   if (typeof value === "boolean") return value;
   if (typeof value === "number") return value !== 0;
@@ -1000,7 +1011,11 @@ function buildDeviceRow(device) {
   }
   var meta = createEl("div", "device-meta");
   var lastSeen = formatLastSeen(device.lastSeen || device.last_seen);
-  meta.textContent = "Type: " + (device.type || "unknown") + " \u00b7 Last seen: " + lastSeen + " \u00b7 ID: " + device.id;
+  var sessionCount = getDeviceSessionCounts()[device.id] || 0;
+  meta.textContent = "Type: " + (device.type || "unknown") +
+    " \u00b7 Sessions: " + sessionCount +
+    " \u00b7 Last seen: " + lastSeen +
+    " \u00b7 ID: " + device.id;
   info.appendChild(name);
   info.appendChild(meta);
   main.appendChild(info);
@@ -1162,10 +1177,132 @@ function buildDeviceRow(device) {
   return row;
 }
 
+function setDeviceMergeStatus(message, isError) {
+  var el = document.getElementById("device-merge-status");
+  if (!el) return;
+  el.textContent = message || "";
+  el.style.color = isError ? "#ff8a80" : "#6fcf97";
+}
+
+function renderDeviceMergePanel() {
+  var targetSelect = document.getElementById("device-merge-target");
+  var sourcesList = document.getElementById("device-merge-sources");
+  if (!targetSelect || !sourcesList) return;
+
+  var counts = getDeviceSessionCounts();
+  var previousTarget = targetSelect.value;
+  var checkedSources = {};
+  var existingChecks = sourcesList.querySelectorAll("input[type=checkbox][data-device-id]");
+  for (var c = 0; c < existingChecks.length; c++) {
+    if (existingChecks[c].checked) checkedSources[existingChecks[c].getAttribute("data-device-id")] = true;
+  }
+
+  targetSelect.textContent = "";
+  sourcesList.textContent = "";
+
+  if (!allDevices || allDevices.length < 2) {
+    var hint = createEl("div", "device-merge-hint");
+    hint.textContent = "At least two devices are required to merge.";
+    sourcesList.appendChild(hint);
+    targetSelect.disabled = true;
+    return;
+  }
+
+  targetSelect.disabled = false;
+  var hasPreviousTarget = false;
+  for (var i = 0; i < allDevices.length; i++) {
+    var device = allDevices[i];
+    var opt = document.createElement("option");
+    opt.value = device.id;
+    opt.textContent = (device.name || "Unnamed") + " (" + (counts[device.id] || 0) + " sessions)";
+    if (device.id === previousTarget) {
+      opt.selected = true;
+      hasPreviousTarget = true;
+    }
+    targetSelect.appendChild(opt);
+  }
+  if (!hasPreviousTarget && allDevices.length) targetSelect.value = allDevices[0].id;
+
+  var targetId = targetSelect.value;
+  for (var j = 0; j < allDevices.length; j++) {
+    var src = allDevices[j];
+    var row = createEl("label", "device-merge-source");
+    if (src.id === targetId) row.className += " is-target";
+    var cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.setAttribute("data-device-id", src.id);
+    cb.disabled = src.id === targetId;
+    cb.checked = !!checkedSources[src.id] && src.id !== targetId;
+    row.appendChild(cb);
+    row.appendChild(document.createTextNode(
+      (src.name || "Unnamed") + " \u00b7 " + (counts[src.id] || 0) + " sessions"
+    ));
+    sourcesList.appendChild(row);
+  }
+}
+
+function mergeSelectedDevices() {
+  if (!requireAdminAction()) return;
+
+  var targetSelect = document.getElementById("device-merge-target");
+  var sourcesList = document.getElementById("device-merge-sources");
+  if (!targetSelect || !sourcesList) return;
+
+  var targetId = targetSelect.value;
+  if (!targetId) {
+    setDeviceMergeStatus("Select a target device", true);
+    return;
+  }
+
+  var sourceIds = [];
+  var checks = sourcesList.querySelectorAll("input[type=checkbox][data-device-id]");
+  for (var i = 0; i < checks.length; i++) {
+    if (checks[i].checked && !checks[i].disabled) {
+      sourceIds.push(checks[i].getAttribute("data-device-id"));
+    }
+  }
+
+  if (!sourceIds.length) {
+    setDeviceMergeStatus("Select at least one source device", true);
+    return;
+  }
+
+  var counts = getDeviceSessionCounts();
+  var targetDevice = deviceIndex[targetId];
+  var targetName = targetDevice && targetDevice.name ? targetDevice.name : targetId;
+  var totalSessions = 0;
+  for (var s = 0; s < sourceIds.length; s++) {
+    totalSessions += counts[sourceIds[s]] || 0;
+  }
+
+  var msg = "Merge " + sourceIds.length + " device(s) (" + totalSessions + " sessions) into \"" +
+    targetName + "\"?\n\nSource devices will be deleted. Exact duplicate sessions on the target are removed.";
+  if (!confirm(msg)) return;
+
+  setDeviceMergeStatus("Merging...", false);
+  apiRequest("/api/devices/merge", "POST", {
+    targetDeviceId: targetId,
+    sourceDeviceIds: sourceIds
+  }, true)
+    .then(function (res) {
+      if (!res.ok) throw new Error((res.json && res.json.error) || "Merge failed");
+      var moved = res.json && res.json.moved != null ? res.json.moved : 0;
+      var dupes = res.json && res.json.duplicatesRemoved != null ? res.json.duplicatesRemoved : 0;
+      setDeviceMergeStatus("Merged: " + moved + " sessions moved" + (dupes ? ", " + dupes + " duplicates removed" : ""), false);
+      setAdminStatus("Devices merged into " + targetName, false);
+      return refreshDashboardData();
+    })
+    .catch(function (err) {
+      setDeviceMergeStatus(err.message, true);
+    });
+}
+
 function renderDevices() {
   var list = document.getElementById("device-list");
   if (!list) return;
   list.textContent = "";
+
+  renderDeviceMergePanel();
 
   if (!allDevices || !allDevices.length) {
     list.textContent = "No devices yet.";
@@ -1542,6 +1679,15 @@ fetch("/data")
 
     var createType = document.getElementById("device-create-type");
     fillDeviceTypeSelect(createType, "pc");
+    var mergeTarget = document.getElementById("device-merge-target");
+    if (mergeTarget) {
+      mergeTarget.onchange = function () {
+        renderDeviceMergePanel();
+      };
+    }
+    var mergeBtn = document.getElementById("device-merge-btn");
+    if (mergeBtn) mergeBtn.onclick = mergeSelectedDevices;
+
     var createBtn = document.getElementById("device-create-btn");
     if (createBtn) {
       createBtn.onclick = function () {

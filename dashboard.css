@@ -788,6 +788,65 @@ td.device-cell {
   font-size: 0.75rem;
 }
 
+.device-merge-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.device-merge-field label {
+  display: block;
+  font-size: 0.72rem;
+  color: #888;
+  margin-bottom: 0.35rem;
+}
+
+.device-merge-field select {
+  width: 100%;
+  max-width: 420px;
+  background: #1a1a1a;
+  color: #eee;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 0.45rem 0.55rem;
+  font-size: 0.8rem;
+}
+
+.device-merge-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 0.5rem 0.65rem;
+  background: #141414;
+  border: 1px solid #222;
+  border-radius: 6px;
+}
+
+.device-merge-source {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  color: #ccc;
+}
+
+.device-merge-source input {
+  margin: 0;
+}
+
+.device-merge-source.is-target {
+  opacity: 0.45;
+}
+
+.device-merge-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
 .device-list {
   display: flex;
   flex-direction: column;

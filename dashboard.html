@@ -153,6 +153,27 @@
         </div>
       </div>
 
+      <div class="device-panel" id="device-merge-panel">
+        <div class="device-panel-header">
+          <div class="device-panel-title">Merge Devices</div>
+          <div class="device-panel-subtitle">Move all sessions into one device and remove the sources (admin token required)</div>
+        </div>
+        <div class="device-merge-form">
+          <div class="device-merge-field">
+            <label for="device-merge-target">Target device (keeps token and settings)</label>
+            <select id="device-merge-target"></select>
+          </div>
+          <div class="device-merge-field">
+            <label>Source devices (sessions move to target; devices are deleted)</label>
+            <div id="device-merge-sources" class="device-merge-sources"></div>
+          </div>
+          <div class="device-merge-actions">
+            <button id="device-merge-btn" class="device-admin-btn">Merge into target</button>
+            <span id="device-merge-status" class="device-admin-status"></span>
+          </div>
+        </div>
+      </div>
+
       <div id="device-list" class="device-list"></div>
     </div>
 

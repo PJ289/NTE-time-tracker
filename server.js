@@ -564,6 +564,85 @@ function authenticate(db, req) {
   return { ok: true, isAdmin: false, deviceId: deviceId };
 }
 
+function mergeDevices(db, targetDeviceId, sourceDeviceIds) {
+  const target = db.prepare("SELECT id, last_seen AS lastSeen FROM devices WHERE id = ?").get(targetDeviceId);
+  if (!target) return { error: "Target device not found", status: 404 };
+
+  const uniqueSources = Array.from(new Set(sourceDeviceIds.map((id) => String(id).trim())))
+    .filter((id) => id && id !== targetDeviceId);
+  if (!uniqueSources.length) {
+    return { error: "At least one source device required (different from target)", status: 400 };
+  }
+
+  for (let i = 0; i < uniqueSources.length; i++) {
+    const sourceId = uniqueSources[i];
+    const src = db.prepare("SELECT id FROM devices WHERE id = ?").get(sourceId);
+    if (!src) return { error: "Source device not found: " + sourceId, status: 404 };
+  }
+
+  let moved = 0;
+  let duplicatesRemoved = 0;
+  let maxLastSeen = target.lastSeen || null;
+
+  const tx = db.transaction(function () {
+    for (let s = 0; s < uniqueSources.length; s++) {
+      const sourceId = uniqueSources[s];
+      const sourceDevice = db.prepare("SELECT last_seen AS lastSeen FROM devices WHERE id = ?").get(sourceId);
+      if (sourceDevice && sourceDevice.lastSeen) {
+        if (!maxLastSeen || new Date(sourceDevice.lastSeen) > new Date(maxLastSeen)) {
+          maxLastSeen = sourceDevice.lastSeen;
+        }
+      }
+
+      const sessions = db.prepare(
+        "SELECT id, start_time AS startTime, end_time AS endTime FROM sessions WHERE device_id = ?"
+      ).all(sourceId);
+
+      for (let j = 0; j < sessions.length; j++) {
+        const session = sessions[j];
+        const dup = db.prepare(
+          "SELECT id FROM sessions WHERE device_id = ? AND start_time = ? AND end_time = ?"
+        ).get(targetDeviceId, session.startTime, session.endTime);
+
+        if (dup) {
+          db.prepare("DELETE FROM sessions WHERE id = ?").run(session.id);
+          duplicatesRemoved++;
+        } else {
+          db.prepare("UPDATE sessions SET device_id = ?, updated_at = ? WHERE id = ?").run(
+            targetDeviceId,
+            nowIso(),
+            session.id
+          );
+          moved++;
+        }
+      }
+
+      db.prepare("DELETE FROM devices WHERE id = ?").run(sourceId);
+    }
+
+    if (maxLastSeen) {
+      db.prepare("UPDATE devices SET last_seen = ?, updated_at = ? WHERE id = ?").run(
+        maxLastSeen,
+        nowIso(),
+        targetDeviceId
+      );
+    } else {
+      db.prepare("UPDATE devices SET updated_at = ? WHERE id = ?").run(nowIso(), targetDeviceId);
+    }
+  });
+
+  tx();
+
+  return {
+    ok: true,
+    targetDeviceId: targetDeviceId,
+    sourceDeviceIds: uniqueSources,
+    moved: moved,
+    duplicatesRemoved: duplicatesRemoved,
+    sourcesRemoved: uniqueSources.length
+  };
+}
+
 function getUnknownDeviceId(db, metaGet, metaSet) {
   const existing = metaGet.get("unknown_device_id");
   if (existing && existing.value) return existing.value;
@@ -886,6 +965,44 @@ function startServer(db) {
         const devices = db.prepare("SELECT id, name, type, color, is_test AS isTest, created_at AS createdAt, updated_at AS updatedAt, last_seen AS lastSeen FROM devices ORDER BY created_at ASC").all();
         sendJson(res, 200, { devices: devices });
         logRequest(req, 200, "devices list");
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/devices/merge") {
+        if (!auth.isAdmin) {
+          sendJson(res, 403, { error: "Admin token required" });
+          return;
+        }
+        const body = await readJson(req, res);
+        if (!body) return;
+
+        const targetDeviceId = body.targetDeviceId || body.target;
+        const sourceDeviceIds = body.sourceDeviceIds || body.sources;
+        if (!targetDeviceId || typeof targetDeviceId !== "string" || !targetDeviceId.trim()) {
+          sendJson(res, 400, { error: "targetDeviceId required" });
+          return;
+        }
+        if (!Array.isArray(sourceDeviceIds) || !sourceDeviceIds.length) {
+          sendJson(res, 400, { error: "sourceDeviceIds (non-empty array) required" });
+          return;
+        }
+
+        const result = mergeDevices(db, targetDeviceId.trim(), sourceDeviceIds);
+        if (result.error) {
+          sendJson(res, result.status || 400, { error: result.error });
+          return;
+        }
+
+        sendJson(res, 200, result);
+        broadcastDataUpdate(db);
+        logRequest(
+          req,
+          200,
+          "devices merged target=" + targetDeviceId +
+            " sources=" + result.sourcesRemoved +
+            " moved=" + result.moved +
+            " dupes=" + result.duplicatesRemoved
+        );
         return;
       }
 
