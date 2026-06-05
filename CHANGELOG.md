@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Merge devices (dashboard)**: admin API `POST /api/devices/merge` and Devices tab UI to move all sessions from one or more source devices into a selected target device, then delete the sources. Exact duplicate sessions on the target are dropped.
 
 ### Changed
+- **CI — Docker publish workflow**: updated Docker/GitHub Actions to Node 24–compatible versions, added BuildKit pre-pull retries for transient 504 timeouts, QEMU setup for multi-arch, and `workflow_dispatch` for manual re-runs.
 - **Auto-register policy (`.exe` / `tracker.js`)**: auto-register runs only when Device ID and token are both missing. Existing credentials in `client.json` or a full pair in `.env.client` skip registration; `.env.client` credentials also disable the auto-register flag at runtime.
 - **401 sync errors**: the client no longer clears stored credentials and registers a new device on auth failure; fix the token or device on the server or in config instead.
 - **Tray settings UI**: when Device ID and token are present, Auto-register is shown and saved as off.
