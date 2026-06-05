@@ -18,6 +18,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - Auto-register could still run or replace credentials after a failed sync even when valid Device ID and token were already configured.
+- **Config editor (tray)**: syntax error in the settings HTA `save()` function prevented the form from loading.
+- **Tray HTA windows**: launch logs/settings with `cmd start mshta` (not `windowsHide` on `mshta.exe`, which hid both windows).
+- **Post-update / restart**: empty console after auto-update; restart and post-update launch use hidden `Start-Process` / `spawnHiddenSea` instead of `start nte-tracker.exe`.
 
 ---
 
