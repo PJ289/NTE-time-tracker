@@ -232,6 +232,7 @@ function resolveDashboardUrl(target) {
 
 const rawQueueLimit = parseInt(process.env.NTE_QUEUE_LIMIT || '500', 10);
 const rawSyncTimeout = parseInt(process.env.NTE_SYNC_TIMEOUT_MS || '8000', 10);
+const rawMinSession = parseInt(process.env.NTE_MIN_SESSION_SECONDS || '300', 10);
 
 // Configuration
 const CONFIG = {
@@ -240,7 +241,7 @@ const CONFIG = {
   processName: 'HTGame.exe',
   pollInterval: 5000,
   interimSaveInterval: 60000, // 60 seconds
-  minSessionDuration: 30, // seconds — sessions shorter than this are discarded
+  minSessionDuration: Number.isNaN(rawMinSession) ? 300 : rawMinSession, // discard quick logins / pickups
   initialOffset: 0,
   maxSessions: 100,
   port: 27183,
@@ -256,6 +257,7 @@ const CONFIG = {
   autoOpenDashboard: envFlag('NTE_AUTO_OPEN_DASHBOARD', true),
   autoOpenDashboardTarget: normalizeDashboardTarget(process.env.NTE_AUTO_OPEN_DASHBOARD_TARGET),
   trayStatusPeriod: normalizeTrayStatusPeriod(process.env.NTE_TRAY_STATUS_PERIOD),
+  sessionEndNotify: envFlag('NTE_SESSION_END_NOTIFY', true),
   updateDevBuilds: envFlag('NTE_UPDATE_DEV_BUILDS', false),
   syncTimeoutMs: Number.isNaN(rawSyncTimeout) ? 8000 : rawSyncTimeout,
   queueLimit: Number.isNaN(rawQueueLimit) ? 500 : rawQueueLimit,
@@ -848,14 +850,22 @@ async function syncWithServer(reason) {
   }
 }
 
-/**
- * Shows Windows toast notification
- */
-function showNotification(sessionSeconds, totalSeconds) {
-  const sessionTime = formatTime(sessionSeconds);
-  const totalTime = formatTime(totalSeconds);
+function xmlEscapeText(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
+/**
+ * Shows a Windows toast when the tray icon is not available (e.g. node + NTE_TRAY=0).
+ */
+function showWindowsToastNotification(lines) {
   const ps1Path = path.join(CONFIG.dataDir, 'notify.ps1');
+  const textLines = (lines || []).map(function (line) {
+    return '      <text>' + xmlEscapeText(line) + '</text>';
+  }).join('\n');
   const ps1Content = [
     '[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null',
     '[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null',
@@ -864,9 +874,7 @@ function showNotification(sessionSeconds, totalSeconds) {
     '<toast>',
     '  <visual>',
     '    <binding template="ToastGeneric">',
-    '      <text>' + CONFIG.gameName + '</text>',
-    '      <text>Session: ' + sessionTime + '</text>',
-    '      <text>Total playtime: ' + totalTime + '</text>',
+    textLines,
     '    </binding>',
     '  </visual>',
     '  <audio silent="true"/>',
@@ -880,10 +888,33 @@ function showNotification(sessionSeconds, totalSeconds) {
   ].join('\n');
 
   fs.writeFileSync(ps1Path, ps1Content, 'utf8');
-  exec('powershell -NoProfile -ExecutionPolicy Bypass -File "' + ps1Path + '"', { windowsHide: true }, (err) => {
+  exec('powershell -NoProfile -ExecutionPolicy Bypass -File "' + ps1Path + '"', { windowsHide: true }, function (err) {
     if (err) log('Notification error: ' + err.message);
-    fs.unlink(ps1Path, () => {});
+    fs.unlink(ps1Path, function () {});
   });
+}
+
+/**
+ * Session-end summary: session time, today, and total (tray balloon or toast fallback).
+ */
+function showSessionEndNotification(sessionSeconds, totalSeconds) {
+  if (!CONFIG.sessionEndNotify || !process.platform.startsWith('win')) return;
+
+  const lines = [
+    CONFIG.gameName + ' — session ended',
+    'Session: ' + formatTime(sessionSeconds),
+    'Today: ' + formatTime(sumTrayPeriodSeconds('today', false)),
+    'Total: ' + formatTime(totalSeconds)
+  ];
+  const balloonText = lines.slice(1).join('\n');
+
+  if (TRAY_ENABLED) {
+    signalTrayBalloon(balloonText);
+    log('Session end notification: ' + lines.slice(1).join(' | '));
+    return;
+  }
+
+  showWindowsToastNotification(lines);
 }
 
 const PENDING_UPDATE_FILE = function () {
@@ -1357,6 +1388,8 @@ function openConfigWindow() {
     'NTE_AUTO_OPEN_DASHBOARD',
     'NTE_AUTO_OPEN_DASHBOARD_TARGET',
     'NTE_TRAY_STATUS_PERIOD',
+    'NTE_SESSION_END_NOTIFY',
+    'NTE_MIN_SESSION_SECONDS',
     'NTE_TRAY',
     'NTE_CONSOLE_LOG',
     'NTE_UPDATE_DEV_BUILDS'
@@ -1367,7 +1400,8 @@ function openConfigWindow() {
     ['Device name', 'NTE_DEVICE_NAME', 'text', 'Label shown on the server dashboard. Leave empty to use your PC hostname.'],
     ['Device type', 'NTE_DEVICE_TYPE', 'text', 'Category sent to the server. Usually leave as pc.'],
     ['Device ID', 'NTE_DEVICE_ID', 'text', 'Fixed device ID from the server. If both ID and token are set here, they override client.json on restart (recommended for legacy/manual linking).'],
-    ['Device token', 'NTE_DEVICE_TOKEN', 'text', 'Device token paired with Device ID. Save both fields; empty token field keeps the value loaded when the form opened. Overrides client.json on restart.']
+    ['Device token', 'NTE_DEVICE_TOKEN', 'text', 'Device token paired with Device ID. Save both fields; empty token field keeps the value loaded when the form opened. Overrides client.json on restart.'],
+    ['Min session (seconds)', 'NTE_MIN_SESSION_SECONDS', 'text', 'Sessions shorter than this are ignored (not saved, synced, or notified). Default 300 (5 min). Restart to apply.']
   ];
   const selects = [
     ['Tray time display', 'NTE_TRAY_STATUS_PERIOD', [
@@ -1389,6 +1423,7 @@ function openConfigWindow() {
     ['Sync after session', 'NTE_SYNC_ON_END', true, 'Upload after each gaming session ends. Recommended for near real-time server updates.'],
     ['Local dashboard', 'NTE_LOCAL_DASHBOARD', true, 'Keep http://127.0.0.1:27183 on this PC. When server URL is also set, tray shows separate Open Server / Open Local entries.'],
     ['Open dashboard when game starts', 'NTE_AUTO_OPEN_DASHBOARD', true, 'Open a browser tab when HTGame.exe starts. Disable to leave the browser closed until you open it from the tray.'],
+    ['Notify when session ends', 'NTE_SESSION_END_NOTIFY', true, 'Tray balloon after each gaming session with session, today, and total playtime.'],
     ['Tray in node mode', 'NTE_TRAY', false, 'Show the tray icon when running with node tracker.js. Always enabled for nte-tracker.exe.'],
     ['Console debug logs', 'NTE_CONSOLE_LOG', false, 'Show a console window with live output. Useful for debugging only.'],
     ['Dev pre-release updates', 'NTE_UPDATE_DEV_BUILDS', false, 'Check GitHub pre-releases for nte-tracker.exe instead of stable /releases/latest only. Enable to auto-update from dev builds (e.g. v2.3.0-dev).']
@@ -1748,14 +1783,11 @@ function buildTrayScript() {
     '',
     '$balloonTimer = New-Object System.Windows.Forms.Timer',
     '$balloonTimer.Interval = 1500',
-    '$script:balloonShown = $false',
     '$balloonTimer.Add_Tick({',
-    '    if ($script:balloonShown) { return }',
     '    if (-not (Test-Path $balloonFile)) { return }',
     '    $text = (Get-Content $balloonFile -Raw).Trim()',
     '    if (-not $text) { return }',
     '    Remove-Item $balloonFile -Force -ErrorAction SilentlyContinue',
-    '    $script:balloonShown = $true',
     '    $tray.ShowBalloonTip(8000, "NTE Tracker", $text, [System.Windows.Forms.ToolTipIcon]::Info)',
     '})',
     '$balloonTimer.Start()',
@@ -2304,7 +2336,7 @@ function pollProcess() {
         saveData(false);
 
         log('Game stopped - session: ' + formatTime(sessionDuration) + ', total: ' + formatTime(data.totalSeconds));
-        showNotification(sessionDuration, data.totalSeconds);
+        showSessionEndNotification(sessionDuration, data.totalSeconds);
         writePlaytimeLog();
         broadcastSSE('session-end', {
           totalSeconds: data.totalSeconds,

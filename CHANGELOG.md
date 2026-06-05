@@ -14,8 +14,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Client config (`.env.client`)**: `NTE_AUTO_OPEN_DASHBOARD` (on/off) and `NTE_AUTO_OPEN_DASHBOARD_TARGET` (`local` or `server`) control auto-open on game start.
 - **Tray time display**: `NTE_TRAY_STATUS_PERIOD` (`total`, `today`, `week`, `month`) — configurable via dropdown in Edit Config.
 - **Local dashboard UI**: `/data` includes `dashboardMode: local`; hides server-only tabs (Devices, Config), device filter, and session admin tools. Server dashboard unchanged (`dashboardMode: server`).
+- **Session-end notification**: tray balloon when a gaming session ends shows session, today, and total playtime (`NTE_SESSION_END_NOTIFY` in Edit Config; on by default).
 
 ### Changed
+- **Minimum session length (client)**: default raised from 30 s to **5 min** (`300` s); quick logins are not saved, synced, or notified. Configurable in Edit Config or via `NTE_MIN_SESSION_SECONDS` in `.env.client`.
 - **Tray / double-click Open Dashboard** prefers the **server** URL when `NTE_SERVER_URL` is set; local remains available as its own menu item when `NTE_LOCAL_DASHBOARD=1`.
 - **Auto-open dashboard target** in Edit Config is now a dropdown (Auto / Local / Server) instead of free text.
 
