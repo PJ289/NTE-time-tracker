@@ -1,5 +1,8 @@
 name: Build Tracker EXE
 
+permissions:
+  contents: write
+
 on:
   release:
     types: [published]
