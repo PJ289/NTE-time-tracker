@@ -983,13 +983,33 @@ td.device-cell {
 
 .device-token {
   margin-top: 0.6rem;
-  font-size: 0.7rem;
-  color: #9ad1ff;
+  font-size: 0.75rem;
+  color: #c8e6ff;
   background: #141414;
-  border: 1px solid #223;
+  border: 1px solid #2a4a6a;
   border-radius: 6px;
-  padding: 0.5rem 0.6rem;
+  padding: 0.55rem 0.65rem;
+}
+
+.device-token-title {
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+  color: #9ad1ff;
+}
+
+.device-token-value {
+  display: block;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 0.72rem;
+  color: #e8f4ff;
   word-break: break-all;
+  margin-bottom: 0.45rem;
+}
+
+.device-token-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
 }
 
 @media (max-width: 640px) {

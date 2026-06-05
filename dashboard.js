@@ -17,6 +17,8 @@ var filteredSessions = [], filteredTotalSeconds = 0, initialOffsetSeconds = 0;
 var selectedDeviceId = "all";
 var selectedSessionIds = {};
 var editingSessionId = null;
+/** deviceId -> plaintext token shown once after rotate/create (survives list refresh) */
+var rotatedDeviceTokens = {};
 
 var DEVICE_TYPE_OPTIONS = [
   { value: "pc", label: "PC" },
@@ -28,6 +30,43 @@ var DEVICE_TYPE_OPTIONS = [
 ];
 
 var PAGE_SIZE_OPTIONS = [3, 5, 7, 10, 15, 20];
+
+var DASHBOARD_UI_KEY = "nteDashboardUi";
+var VALID_DASHBOARD_TABS = ["calendar", "all", "devices", "config"];
+
+function saveDashboardUi() {
+  try {
+    localStorage.setItem(DASHBOARD_UI_KEY, JSON.stringify({
+      tab: activeTab,
+      deviceId: selectedDeviceId,
+      calYear: calYear,
+      calMonth: calMonth,
+      allPage: allPage,
+      selectedDateKey: selectedDateKey
+    }));
+  } catch (err) {
+    // ignore private mode / quota errors
+  }
+}
+
+function loadDashboardUiState() {
+  try {
+    var raw = localStorage.getItem(DASHBOARD_UI_KEY);
+    if (!raw) return;
+    var s = JSON.parse(raw);
+    if (!s || typeof s !== "object") return;
+    if (VALID_DASHBOARD_TABS.indexOf(s.tab) >= 0) activeTab = s.tab;
+    if (typeof s.deviceId === "string") selectedDeviceId = s.deviceId;
+    if (typeof s.calYear === "number" && !isNaN(s.calYear)) calYear = s.calYear;
+    if (typeof s.calMonth === "number" && s.calMonth >= 0 && s.calMonth <= 11) calMonth = s.calMonth;
+    if (typeof s.allPage === "number" && s.allPage >= 0) allPage = s.allPage;
+    if (typeof s.selectedDateKey === "string" || s.selectedDateKey === null) {
+      selectedDateKey = s.selectedDateKey;
+    }
+  } catch (err) {
+    // ignore corrupt storage
+  }
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -150,6 +189,7 @@ function renderDeviceFilter() {
     updateTimes();
     if (activeTab === "all") renderAllSessions();
     updateFilterLabel();
+    saveDashboardUi();
   };
 }
 
@@ -610,6 +650,7 @@ function renderCalendar() {
     calMonth--;
     if (calMonth < 0) { calMonth = 11; calYear--; }
     renderCalendar();
+    saveDashboardUi();
   };
   var label = createEl("span", "cal-month-label");
   label.textContent = MONTH_NAMES[calMonth] + " " + calYear;
@@ -619,6 +660,7 @@ function renderCalendar() {
     calMonth++;
     if (calMonth > 11) { calMonth = 0; calYear++; }
     renderCalendar();
+    saveDashboardUi();
   };
   nav.appendChild(prevBtn);
   nav.appendChild(label);
@@ -663,6 +705,7 @@ function renderCalendar() {
           selectedDateKey = k;
           renderCalDayView();
           renderCalendar();
+          saveDashboardUi();
         };
       })(key);
     }
@@ -850,7 +893,7 @@ function buildPageNav(totalPages) {
   var prev = createEl("button", "page-btn");
   prev.textContent = "\u2190";
   prev.disabled = allPage === 0;
-  prev.onclick = function() { allPage--; renderAllSessions(); };
+  prev.onclick = function() { allPage--; renderAllSessions(); saveDashboardUi(); };
   nav.appendChild(prev);
 
   for (var p = 0; p < totalPages; p++) {
@@ -865,7 +908,7 @@ function buildPageNav(totalPages) {
     var btn = createEl("button", "page-btn" + (p === allPage ? " active" : ""));
     btn.textContent = p + 1;
     btn.onclick = (function(pg) {
-      return function() { allPage = pg; renderAllSessions(); };
+      return function() { allPage = pg; renderAllSessions(); saveDashboardUi(); };
     })(p);
     nav.appendChild(btn);
   }
@@ -873,7 +916,7 @@ function buildPageNav(totalPages) {
   var next = createEl("button", "page-btn");
   next.textContent = "\u2192";
   next.disabled = allPage >= totalPages - 1;
-  next.onclick = function() { allPage++; renderAllSessions(); };
+  next.onclick = function() { allPage++; renderAllSessions(); saveDashboardUi(); };
   nav.appendChild(next);
 
   return nav;
@@ -881,10 +924,66 @@ function buildPageNav(totalPages) {
 
 // ── Device Management ───────────────────────────────────────────────────────
 
+function copyTextToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text).then(function () {
+      setAdminStatus("Token copied to clipboard", false);
+    }).catch(function () {
+      copyTextToClipboardFallback(text);
+    });
+  }
+  copyTextToClipboardFallback(text);
+}
+
+function copyTextToClipboardFallback(text) {
+  var ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand("copy");
+    setAdminStatus("Token copied to clipboard", false);
+  } catch (err) {
+    setAdminStatus("Copy failed — select the token text manually", true);
+  }
+  document.body.removeChild(ta);
+}
+
+function renderDeviceTokenNotice(container, deviceId) {
+  var token = rotatedDeviceTokens[deviceId];
+  if (!token) {
+    container.style.display = "none";
+    container.textContent = "";
+    return;
+  }
+  container.style.display = "block";
+  container.textContent = "";
+
+  var title = createEl("div", "device-token-title");
+  title.textContent = "New token (copy now — shown only once):";
+  container.appendChild(title);
+
+  var code = createEl("code", "device-token-value");
+  code.textContent = token;
+  container.appendChild(code);
+
+  var actions = createEl("div", "device-token-actions");
+  var copyBtn = createEl("button", "device-action-btn");
+  copyBtn.textContent = "Copy token";
+  copyBtn.onclick = function () {
+    copyTextToClipboard(token);
+  };
+  actions.appendChild(copyBtn);
+  container.appendChild(actions);
+}
+
 function buildDeviceRow(device) {
   var isTest = parseBool(device.isTest || device.is_test);
 
   var row = createEl("div", "device-row");
+  row.dataset.deviceId = device.id;
   var main = createEl("div", "device-row-main");
 
   var swatch = createEl("div", "device-color-swatch");
@@ -980,8 +1079,8 @@ function buildDeviceRow(device) {
   row.appendChild(edit);
 
   var tokenNotice = createEl("div", "device-token");
-  tokenNotice.style.display = "none";
   row.appendChild(tokenNotice);
+  renderDeviceTokenNotice(tokenNotice, device.id);
 
   editBtn.onclick = function () {
     if (!requireAdminAction()) return;
@@ -1047,10 +1146,13 @@ function buildDeviceRow(device) {
     apiRequest("/api/devices/" + device.id + "/token", "POST", {}, true)
       .then(function (res) {
         if (!res.ok) throw new Error((res.json && res.json.error) || "Token rotation failed");
-        tokenNotice.textContent = "New token: " + res.json.token;
-        tokenNotice.style.display = "block";
-        setAdminStatus("Token rotated", false);
-        return refreshDashboardData();
+        if (!res.json || !res.json.token) throw new Error("Token rotation failed: empty response");
+        rotatedDeviceTokens[device.id] = res.json.token;
+        setAdminStatus("Token rotated — copy the new token below", false);
+        return refreshDashboardData().then(function () {
+          var rowEl = document.querySelector('.device-row[data-device-id="' + device.id + '"]');
+          if (rowEl) rowEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        });
       })
       .catch(function (err) {
         setAdminStatus(err.message, true);
@@ -1217,6 +1319,7 @@ function deleteEditSession() {
 // ── Tab Switching ─────────────────────────────────────────────────────────────
 
 function switchTab(name) {
+  if (VALID_DASHBOARD_TABS.indexOf(name) < 0) name = "calendar";
   activeTab = name;
   document.querySelectorAll(".tab-btn").forEach(function(b) {
     b.className = b.getAttribute("data-tab") === name ? "tab-btn active" : "tab-btn";
@@ -1232,6 +1335,7 @@ function switchTab(name) {
   if (name === "all") renderAllSessions();
   if (name === "devices") renderDevices();
   if (name === "config") loadServerConfig();
+  saveDashboardUi();
 }
 
 // ── Live Timer & Banner ───────────────────────────────────────────────────────
@@ -1399,6 +1503,7 @@ fetch("/data")
     var now = new Date();
     calYear = now.getFullYear();
     calMonth = now.getMonth();
+    loadDashboardUiState();
     applyData(normalizeData(DATA));
     fetchVersionInfo();
 
@@ -1457,7 +1562,11 @@ fetch("/data")
         apiRequest("/api/devices/register", "POST", payload, true)
           .then(function (res) {
             if (!res.ok) throw new Error((res.json && res.json.error) || "Create failed");
-            if (status) status.textContent = "Created. Token: " + res.json.token;
+            if (res.json && res.json.deviceId && res.json.token) {
+              rotatedDeviceTokens[res.json.deviceId] = res.json.token;
+            }
+            if (status) status.textContent = "Device created — copy the new token on its row";
+            setAdminStatus("Device created — copy the new token below", false);
             return refreshDashboardData();
           })
           .catch(function (err) {
@@ -1524,6 +1633,7 @@ fetch("/data")
         allPage = value - 1;
         pageSelect.value = String(value);
         renderAllSessions();
+        saveDashboardUi();
       };
       pageSelect.onchange = commitPage;
       pageSelect.onblur = commitPage;
@@ -1536,6 +1646,7 @@ fetch("/data")
           DAYS_PER_PAGE = value;
           allPage = 0;
           renderAllSessions();
+          saveDashboardUi();
         }
       };
     }
@@ -1561,6 +1672,9 @@ fetch("/data")
     document.querySelectorAll(".tab-btn").forEach(function(b) {
       b.onclick = function() { switchTab(b.getAttribute("data-tab")); };
     });
+    switchTab(activeTab);
+
+    window.addEventListener("beforeunload", saveDashboardUi);
 
     var evtSource = new EventSource("/events");
     document.getElementById("status").textContent = "";
