@@ -68,6 +68,9 @@ function applyDashboardMode() {
   var manualPanel = document.querySelector("#tab-all .manual-panel");
   if (manualPanel) manualPanel.style.display = isLocalDashboard ? "none" : "";
 
+  var deleteTestBtn = document.getElementById("delete-test-btn");
+  if (deleteTestBtn) deleteTestBtn.style.display = isLocalDashboard ? "none" : "";
+
   var banner = document.getElementById("local-dashboard-note");
   if (isLocalDashboard) {
     if (!banner) {
@@ -179,6 +182,10 @@ function updateFilterLabel() {
     label.textContent = "Local";
     return;
   }
+  if (selectedDeviceId === "__test__") {
+    label.textContent = "Test sessions only";
+    return;
+  }
   var device = deviceIndex[selectedDeviceId];
   label.textContent = device ? device.name : "Filtered";
 }
@@ -192,6 +199,13 @@ function renderDeviceFilter() {
   allOpt.value = "all";
   allOpt.textContent = "All devices";
   select.appendChild(allOpt);
+
+  if (isServerDashboard()) {
+    var testOpt = document.createElement("option");
+    testOpt.value = "__test__";
+    testOpt.textContent = "Test sessions only";
+    select.appendChild(testOpt);
+  }
 
   if (allDevices && allDevices.length) {
     for (var i = 0; i < allDevices.length; i++) {
@@ -236,6 +250,7 @@ function applyFilter() {
   var sessions = allSessions || [];
   if (selectedDeviceId && selectedDeviceId !== "all") {
     sessions = sessions.filter(function (s) {
+      if (selectedDeviceId === "__test__") return parseBool(s.isTest || s.is_test);
       if (selectedDeviceId === "local") return !s.deviceId;
       return s.deviceId === selectedDeviceId;
     });
@@ -452,6 +467,13 @@ function formatLastSeen(iso) {
     year: "numeric", month: "short", day: "numeric",
     hour: "2-digit", minute: "2-digit", hour12: false
   });
+}
+
+function isSessionMarkedTest(session) {
+  if (!session) return false;
+  if (parseBool(session.isTest || session.is_test)) return true;
+  var device = resolveDevice(session);
+  return device ? parseBool(device.isTest) : false;
 }
 
 function resolveDevice(session) {
@@ -834,7 +856,7 @@ function buildDayCard(day, collapsible, showActions) {
     deviceTd.setAttribute("data-label", "Device");
     var deviceInfo = resolveDevice(sess);
     deviceTd.appendChild(createDeviceTag(deviceInfo));
-    if (deviceInfo && deviceInfo.isTest) {
+    if (isSessionMarkedTest(sess)) {
       var testBadge = createEl("span", "device-test-badge");
       testBadge.textContent = "TEST";
       deviceTd.appendChild(testBadge);
@@ -1388,6 +1410,22 @@ function combineSelectedSessions() {
     });
 }
 
+function deleteAllTestSessions() {
+  if (!requireAdminAction()) return;
+  if (!confirm("Delete all sessions marked as TEST on the server? This cannot be undone.")) return;
+  var status = document.getElementById("combine-status");
+  apiRequest("/api/sessions/test", "DELETE", null, true)
+    .then(function (res) {
+      if (!res.ok) throw new Error((res.json && res.json.error) || "Delete failed");
+      var count = res.json && typeof res.json.deleted === "number" ? res.json.deleted : 0;
+      if (status) status.textContent = "Deleted " + count + " test session(s)";
+      return refreshDashboardData();
+    })
+    .catch(function (err) {
+      if (status) status.textContent = err.message;
+    });
+}
+
 function deleteSession(session) {
   if (!session || !session.id) return;
   if (!requireAdminAction()) return;
@@ -1811,6 +1849,8 @@ fetch("/data")
     if (combineBtn && !isLocalDashboard) combineBtn.onclick = combineSelectedSessions;
     var clearBtn = document.getElementById("clear-selection");
     if (clearBtn && !isLocalDashboard) clearBtn.onclick = clearSelection;
+    var deleteTestBtn = document.getElementById("delete-test-btn");
+    if (deleteTestBtn && !isLocalDashboard) deleteTestBtn.onclick = deleteAllTestSessions;
 
     updatePageSizeSelect();
     var pageSelect = document.getElementById("page-select");

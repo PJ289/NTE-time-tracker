@@ -15,6 +15,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Tray time display**: `NTE_TRAY_STATUS_PERIOD` (`total`, `today`, `week`, `month`) — configurable via dropdown in Edit Config.
 - **Local dashboard UI**: `/data` includes `dashboardMode: local`; hides server-only tabs (Devices, Config), device filter, and session admin tools. Server dashboard unchanged (`dashboardMode: server`).
 - **Session-end notification**: tray balloon when a gaming session ends shows session, today, and total playtime (`NTE_SESSION_END_NOTIFY` in Edit Config; on by default).
+- **Test session uploads (client)**: `NTE_SESSIONS_AS_TEST` marks synced sessions with a TEST badge on the server (`Mark synced sessions as test` in Edit Config).
+- **Test sessions (server dashboard)**: filter **Test sessions only**; admin **Delete Test Sessions** removes all `is_test` rows (`DELETE /api/sessions/test`). Requires server DB schema v3 (auto-migrates on start).
 
 ### Changed
 - **Minimum session length (client)**: default raised from 30 s to **5 min** (`300` s); quick logins are not saved, synced, or notified. Configurable in Edit Config or via `NTE_MIN_SESSION_SECONDS` in `.env.client`.

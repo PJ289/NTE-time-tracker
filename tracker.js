@@ -249,6 +249,7 @@ const CONFIG = {
   deviceName: process.env.NTE_DEVICE_NAME || (os.hostname() + ' (PC)'),
   deviceType: process.env.NTE_DEVICE_TYPE || 'pc',
   deviceIsTest: envFlag('NTE_DEVICE_IS_TEST', false),
+  sessionsAsTest: envFlag('NTE_SESSIONS_AS_TEST', false),
   deviceAutoRegister: envFlag('NTE_DEVICE_AUTO_REGISTER', true),
   syncOnStart: envFlag('NTE_SYNC_ON_START', true),
   syncOnEnd: envFlag('NTE_SYNC_ON_END', true),
@@ -796,6 +797,7 @@ async function syncWithServer(reason) {
 
     const payload = {
       deviceId: clientState.deviceId,
+      markSessionsAsTest: CONFIG.sessionsAsTest,
       sessions: combined.map(function (s) {
         return {
           startTime: s.startTime,
@@ -1381,6 +1383,7 @@ function openConfigWindow() {
     'NTE_DEVICE_ID',
     'NTE_DEVICE_TOKEN',
     'NTE_DEVICE_IS_TEST',
+    'NTE_SESSIONS_AS_TEST',
     'NTE_DEVICE_AUTO_REGISTER',
     'NTE_SYNC_ON_START',
     'NTE_SYNC_ON_END',
@@ -1417,7 +1420,8 @@ function openConfigWindow() {
     ], 'Which dashboard opens when the game starts. Requires "Open dashboard when game starts" enabled. Restart to apply.']
   ];
   const checks = [
-    ['Mark as test device', 'NTE_DEVICE_IS_TEST', false, 'Sessions appear as test data on the server. Use only for experiments.'],
+    ['Mark as test device', 'NTE_DEVICE_IS_TEST', false, 'Only when auto-registering a new device: marks the whole device as test on the server.'],
+    ['Mark synced sessions as test', 'NTE_SESSIONS_AS_TEST', false, 'While enabled, sessions uploaded to the server get a TEST badge (filter and bulk-delete on the server dashboard). Restart to apply.'],
     ['Auto-register device', 'NTE_DEVICE_AUTO_REGISTER', true, 'Register this PC only when Device ID and token are empty. Ignored if credentials exist in .env.client or client.json. Turn off when using a fixed device.'],
     ['Sync on startup', 'NTE_SYNC_ON_START', true, 'Upload pending sessions when the tracker starts. Recommended when server sync is enabled.'],
     ['Sync after session', 'NTE_SYNC_ON_END', true, 'Upload after each gaming session ends. Recommended for near real-time server updates.'],

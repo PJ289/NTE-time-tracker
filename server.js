@@ -181,7 +181,7 @@ const CONFIG = {
   maxBodyBytes: 1024 * 1024
 };
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const DATA_DIR = getDataDir();
 const DB_FILE = path.join(DATA_DIR, "nte.db");
@@ -282,6 +282,7 @@ function initDb() {
         "end_time TEXT NOT NULL, " +
         "duration INTEGER NOT NULL, " +
         "is_manual INTEGER NOT NULL DEFAULT 0, " +
+        "is_test INTEGER NOT NULL DEFAULT 0, " +
         "created_at TEXT NOT NULL, " +
         "updated_at TEXT NOT NULL, " +
         "UNIQUE(device_id, start_time, end_time), " +
@@ -292,10 +293,15 @@ function initDb() {
     );
     metaSet.run("schema_version", String(SCHEMA_VERSION));
   } else {
-    const currentVersion = parseInt(versionRow.value, 10) || 1;
+    let currentVersion = parseInt(versionRow.value, 10) || 1;
     if (currentVersion < 2) {
       migrateToV2(db);
+      currentVersion = 2;
       metaSet.run("schema_version", "2");
+    }
+    if (currentVersion < 3) {
+      migrateToV3(db);
+      metaSet.run("schema_version", "3");
     }
   }
 
@@ -365,6 +371,14 @@ function migrateToV2(db) {
   }
 }
 
+function migrateToV3(db) {
+  try {
+    db.exec("ALTER TABLE sessions ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0");
+  } catch (err) {
+    log("Session is_test migration skipped: " + err.message);
+  }
+}
+
 function migrateFromJsonIfNeeded(db, metaGet, metaSet) {
   const imported = metaGet.get("imported_json_v1");
   if (imported) return;
@@ -390,7 +404,7 @@ function migrateFromJsonIfNeeded(db, metaGet, metaSet) {
 
   const deviceId = ensureLegacyDevice(db, metaGet, metaSet);
   const insert = db.prepare(
-    "INSERT OR IGNORE INTO sessions (device_id, start_time, end_time, duration, is_manual, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    "INSERT OR IGNORE INTO sessions (device_id, start_time, end_time, duration, is_manual, is_test, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
   );
 
   const tx = db.transaction((rows) => {
@@ -398,7 +412,7 @@ function migrateFromJsonIfNeeded(db, metaGet, metaSet) {
     for (let i = 0; i < rows.length; i++) {
       const row = normalizeLegacySession(rows[i]);
       if (!row) continue;
-      const res = insert.run(deviceId, row.startTime, row.endTime, row.duration, 0, row.createdAt, row.updatedAt);
+      const res = insert.run(deviceId, row.startTime, row.endTime, row.duration, 0, 0, row.createdAt, row.updatedAt);
       if (res.changes > 0) count++;
     }
     return count;
@@ -663,7 +677,7 @@ function getUnknownDeviceId(db, metaGet, metaSet) {
 
 function getDashboardData(db) {
   const sessions = db.prepare(
-    "SELECT s.id, s.start_time AS startTime, s.end_time AS endTime, s.duration, s.is_manual AS isManual, " +
+    "SELECT s.id, s.start_time AS startTime, s.end_time AS endTime, s.duration, s.is_manual AS isManual, s.is_test AS isTest, " +
     "s.device_id AS deviceId, d.name AS deviceName, d.color AS deviceColor, d.type AS deviceType, d.is_test AS deviceIsTest " +
     "FROM sessions s LEFT JOIN devices d ON d.id = s.device_id " +
     "ORDER BY s.start_time ASC"
@@ -1128,6 +1142,18 @@ function startServer(db) {
         return;
       }
 
+      if (req.method === "DELETE" && pathname === "/api/sessions/test") {
+        if (!auth.isAdmin) {
+          sendJson(res, 403, { error: "Admin token required" });
+          return;
+        }
+        const result = db.prepare("DELETE FROM sessions WHERE is_test = 1").run();
+        sendJson(res, 200, { ok: true, deleted: result.changes || 0 });
+        if (result.changes > 0) broadcastDataUpdate(db);
+        logRequest(req, 200, "deleted test sessions count=" + (result.changes || 0));
+        return;
+      }
+
       if (req.method === "POST" && pathname === "/api/sessions/bulk") {
         const body = await readJson(req, res);
         if (!body) return;
@@ -1139,12 +1165,15 @@ function startServer(db) {
         }
 
         const sessions = Array.isArray(body.sessions) ? body.sessions : [];
+        const bulkMarkTest = parseBool(body.markSessionsAsTest || body.sessionsAsTest);
 
         const tx = db.transaction((rows) => {
           const normalized = [];
           for (let i = 0; i < rows.length; i++) {
             const item = normalizeIncomingSession(rows[i]);
-            if (item) normalized.push(item);
+            if (!item) continue;
+            item.isTest = parseBool(rows[i].isTest || rows[i].is_test) || bulkMarkTest;
+            normalized.push(item);
           }
           normalized.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
 
@@ -1152,7 +1181,7 @@ function startServer(db) {
           let skipped = 0;
           let merged = 0;
           for (let i = 0; i < normalized.length; i++) {
-            const result = insertSessionWithMerge(db, deviceId, normalized[i], false);
+            const result = insertSessionWithMerge(db, deviceId, normalized[i], false, normalized[i].isTest);
             inserted += result.inserted;
             merged += result.merged;
             skipped += result.skipped;
@@ -1206,7 +1235,7 @@ function startServer(db) {
             skipped++;
             continue;
           }
-          const result = insertSessionWithMerge(db, deviceId, normalized, false);
+          const result = insertSessionWithMerge(db, deviceId, normalized, false, false);
           inserted += result.inserted;
           merged += result.merged;
           skipped += result.skipped;
@@ -1238,7 +1267,8 @@ function startServer(db) {
         }
 
         const isManual = body.isManual ? true : false;
-        const result = insertSessionWithMerge(db, deviceId, normalized, isManual);
+        const isTest = parseBool(body.isTest || body.is_test || body.test);
+        const result = insertSessionWithMerge(db, deviceId, normalized, isManual, isTest);
         if (result.inserted === 0 && result.merged === 0) {
           sendJson(res, 409, { error: "Duplicate session" });
           return;
@@ -1265,7 +1295,7 @@ function startServer(db) {
         const ids = body.sessionIds.map((id) => String(id));
         const placeholders = ids.map(() => "?").join(",");
         const rows = db.prepare(
-          "SELECT id, device_id AS deviceId, start_time AS startTime, end_time AS endTime, is_manual AS isManual FROM sessions WHERE id IN (" + placeholders + ")"
+          "SELECT id, device_id AS deviceId, start_time AS startTime, end_time AS endTime, is_manual AS isManual, is_test AS isTest FROM sessions WHERE id IN (" + placeholders + ")"
         ).all(ids);
 
         if (rows.length !== ids.length) {
@@ -1284,10 +1314,12 @@ function startServer(db) {
         let minStart = rows[0].startTime;
         let maxEnd = rows[0].endTime;
         let isManual = rows[0].isManual ? 1 : 0;
+        let isTest = rows[0].isTest ? 1 : 0;
         for (let i = 1; i < rows.length; i++) {
           if (new Date(rows[i].startTime) < new Date(minStart)) minStart = rows[i].startTime;
           if (new Date(rows[i].endTime) > new Date(maxEnd)) maxEnd = rows[i].endTime;
           if (rows[i].isManual) isManual = 1;
+          if (rows[i].isTest) isTest = 1;
         }
 
         const duration = sessionDurationFromIso(minStart, maxEnd);
@@ -1295,8 +1327,8 @@ function startServer(db) {
         const deleteIds = rows.slice(1).map((r) => r.id);
 
         db.prepare(
-          "UPDATE sessions SET start_time = ?, end_time = ?, duration = ?, is_manual = ?, updated_at = ? WHERE id = ?"
-        ).run(minStart, maxEnd, duration, isManual, nowIso(), keepId);
+          "UPDATE sessions SET start_time = ?, end_time = ?, duration = ?, is_manual = ?, is_test = ?, updated_at = ? WHERE id = ?"
+        ).run(minStart, maxEnd, duration, isManual, isTest, nowIso(), keepId);
 
         const deletePlaceholders = deleteIds.map(() => "?").join(",");
         db.prepare("DELETE FROM sessions WHERE id IN (" + deletePlaceholders + ")").run(deleteIds);
@@ -1341,6 +1373,10 @@ function startServer(db) {
         if (typeof body.isManual !== "undefined") {
           fields.push("is_manual = ?");
           values.push(body.isManual ? 1 : 0);
+        }
+        if (typeof body.isTest !== "undefined" || typeof body.is_test !== "undefined" || typeof body.test !== "undefined") {
+          fields.push("is_test = ?");
+          values.push(parseBool(body.isTest || body.is_test || body.test) ? 1 : 0);
         }
         if (typeof body.deviceId === "string" && body.deviceId.trim()) {
           fields.push("device_id = ?");
@@ -1401,7 +1437,7 @@ function startServer(db) {
         const limit = parseInt(url.searchParams.get("limit") || "0", 10);
         const offset = parseInt(url.searchParams.get("offset") || "0", 10);
 
-        let sql = "SELECT id, device_id AS deviceId, start_time AS startTime, end_time AS endTime, duration, is_manual AS isManual, created_at AS createdAt, updated_at AS updatedAt FROM sessions";
+        let sql = "SELECT id, device_id AS deviceId, start_time AS startTime, end_time AS endTime, duration, is_manual AS isManual, is_test AS isTest, created_at AS createdAt, updated_at AS updatedAt FROM sessions";
         const values = [];
         if (deviceId) {
           sql += " WHERE device_id = ?";
@@ -1470,11 +1506,11 @@ function sessionDurationFromIso(startIso, endIso) {
 
 function findOverlappingSessions(db, deviceId, startIso, endIso) {
   return db.prepare(
-    "SELECT id, start_time AS startTime, end_time AS endTime, is_manual AS isManual FROM sessions WHERE device_id = ? AND start_time < ? AND end_time > ? ORDER BY start_time ASC"
+    "SELECT id, start_time AS startTime, end_time AS endTime, is_manual AS isManual, is_test AS isTest FROM sessions WHERE device_id = ? AND start_time < ? AND end_time > ? ORDER BY start_time ASC"
   ).all(deviceId, endIso, startIso);
 }
 
-function absorbOverlappingSessions(db, deviceId, session, isManual) {
+function absorbOverlappingSessions(db, deviceId, session, isManual, isTest) {
   const overlaps = findOverlappingSessions(db, deviceId, session.startTime, session.endTime);
   if (!overlaps.length) return null;
 
@@ -1485,6 +1521,7 @@ function absorbOverlappingSessions(db, deviceId, session, isManual) {
   let unionStart = startMs;
   let unionEnd = endMs;
   let mergedManual = isManual ? 1 : 0;
+  let mergedTest = isTest ? 1 : 0;
   const ids = [];
 
   for (let i = 0; i < overlaps.length; i++) {
@@ -1494,6 +1531,7 @@ function absorbOverlappingSessions(db, deviceId, session, isManual) {
     if (!isNaN(rowStart)) unionStart = Math.min(unionStart, rowStart);
     if (!isNaN(rowEnd)) unionEnd = Math.max(unionEnd, rowEnd);
     if (row.isManual) mergedManual = 1;
+    if (row.isTest) mergedTest = 1;
     ids.push(row.id);
   }
 
@@ -1509,8 +1547,8 @@ function absorbOverlappingSessions(db, deviceId, session, isManual) {
   const newDuration = sessionDurationFromIso(newStartIso, newEndIso);
 
   db.prepare(
-    "UPDATE sessions SET start_time = ?, end_time = ?, duration = ?, is_manual = ?, updated_at = ? WHERE id = ?"
-  ).run(newStartIso, newEndIso, newDuration, mergedManual, nowIso(), ids[0]);
+    "UPDATE sessions SET start_time = ?, end_time = ?, duration = ?, is_manual = ?, is_test = ?, updated_at = ? WHERE id = ?"
+  ).run(newStartIso, newEndIso, newDuration, mergedManual, mergedTest, nowIso(), ids[0]);
 
   if (ids.length > 1) {
     const deleteStmt = db.prepare("DELETE FROM sessions WHERE id = ?");
@@ -1523,11 +1561,11 @@ function absorbOverlappingSessions(db, deviceId, session, isManual) {
   return { inserted: 0, merged: 1, skipped: 0 };
 }
 
-function mergeWithPreviousSession(db, deviceId, session, isManual) {
+function mergeWithPreviousSession(db, deviceId, session, isManual, isTest) {
   const mergeGapSeconds = getMergeGapSeconds();
   if (!mergeGapSeconds || mergeGapSeconds <= 0) return null;
   const last = db.prepare(
-    "SELECT id, start_time AS startTime, end_time AS endTime, is_manual AS isManual FROM sessions WHERE device_id = ? ORDER BY end_time DESC LIMIT 1"
+    "SELECT id, start_time AS startTime, end_time AS endTime, is_manual AS isManual, is_test AS isTest FROM sessions WHERE device_id = ? ORDER BY end_time DESC LIMIT 1"
   ).get(deviceId);
   if (!last) return null;
 
@@ -1541,9 +1579,10 @@ function mergeWithPreviousSession(db, deviceId, session, isManual) {
     if (endMs <= lastEnd) return last.id;
     const newDuration = Math.max(0, Math.floor((endMs - lastStart) / 1000));
     const mergedIsManual = (last.isManual ? 1 : 0) || (isManual ? 1 : 0);
+    const mergedIsTest = (last.isTest ? 1 : 0) || (isTest ? 1 : 0);
     db.prepare(
-      "UPDATE sessions SET end_time = ?, duration = ?, is_manual = ?, updated_at = ? WHERE id = ?"
-    ).run(new Date(endMs).toISOString(), newDuration, mergedIsManual, nowIso(), last.id);
+      "UPDATE sessions SET end_time = ?, duration = ?, is_manual = ?, is_test = ?, updated_at = ? WHERE id = ?"
+    ).run(new Date(endMs).toISOString(), newDuration, mergedIsManual, mergedIsTest, nowIso(), last.id);
     return last.id;
   }
 
@@ -1554,28 +1593,39 @@ function mergeWithPreviousSession(db, deviceId, session, isManual) {
   const newEnd = Math.max(lastEnd, endMs);
   const newDuration = Math.max(0, Math.floor((newEnd - newStart) / 1000));
   const mergedIsManual = (last.isManual ? 1 : 0) || (isManual ? 1 : 0);
+  const mergedIsTest = (last.isTest ? 1 : 0) || (isTest ? 1 : 0);
 
   db.prepare(
-    "UPDATE sessions SET start_time = ?, end_time = ?, duration = ?, is_manual = ?, updated_at = ? WHERE id = ?"
-  ).run(new Date(newStart).toISOString(), new Date(newEnd).toISOString(), newDuration, mergedIsManual, nowIso(), last.id);
+    "UPDATE sessions SET start_time = ?, end_time = ?, duration = ?, is_manual = ?, is_test = ?, updated_at = ? WHERE id = ?"
+  ).run(new Date(newStart).toISOString(), new Date(newEnd).toISOString(), newDuration, mergedIsManual, mergedIsTest, nowIso(), last.id);
 
   return last.id;
 }
 
-function insertSessionWithMerge(db, deviceId, session, isManual) {
+function insertSessionWithMerge(db, deviceId, session, isManual, isTest) {
   if (!session || !deviceId) return { inserted: 0, merged: 0, skipped: 1 };
   if (session.duration < getMinSessionDuration()) return { inserted: 0, merged: 0, skipped: 1 };
 
-  const overlapResult = absorbOverlappingSessions(db, deviceId, session, isManual);
+  const markTest = isTest ? true : false;
+  const overlapResult = absorbOverlappingSessions(db, deviceId, session, isManual, markTest);
   if (overlapResult) return overlapResult;
 
-  const mergedId = mergeWithPreviousSession(db, deviceId, session, isManual);
+  const mergedId = mergeWithPreviousSession(db, deviceId, session, isManual, markTest);
   if (mergedId) return { inserted: 0, merged: 1, skipped: 0 };
 
   const insert = db.prepare(
-    "INSERT OR IGNORE INTO sessions (device_id, start_time, end_time, duration, is_manual, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    "INSERT OR IGNORE INTO sessions (device_id, start_time, end_time, duration, is_manual, is_test, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
   );
-  const res = insert.run(deviceId, session.startTime, session.endTime, session.duration, isManual ? 1 : 0, nowIso(), nowIso());
+  const res = insert.run(
+    deviceId,
+    session.startTime,
+    session.endTime,
+    session.duration,
+    isManual ? 1 : 0,
+    markTest ? 1 : 0,
+    nowIso(),
+    nowIso()
+  );
   if (res.changes > 0) return { inserted: 1, merged: 0, skipped: 0 };
   return { inserted: 0, merged: 0, skipped: 1 };
 }
