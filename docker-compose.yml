@@ -12,6 +12,7 @@ services:
         required: false
     environment:
       NTE_DATA_DIR: /data
+      TZ: ${TZ:-Europe/Madrid}
       NTE_HOST: ${NTE_HOST:-0.0.0.0}
       NTE_PORT: ${NTE_PORT:-28183}
       NTE_ADMIN_TOKEN: ${NTE_ADMIN_TOKEN:-}

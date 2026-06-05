@@ -1,7 +1,7 @@
 FROM node:22-bookworm-slim
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 make g++ gosu \
+  && apt-get install -y --no-install-recommends python3 make g++ gosu tzdata \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

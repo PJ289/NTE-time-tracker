@@ -91,8 +91,21 @@ function getDataDir() {
   return path.join(os.homedir(), ".nte-tracker");
 }
 
+function formatLocalDateTime(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  const pad = (n) => String(n).padStart(2, "0");
+  return (
+    d.getFullYear() + "-" +
+    pad(d.getMonth() + 1) + "-" +
+    pad(d.getDate()) + " " +
+    pad(d.getHours()) + ":" +
+    pad(d.getMinutes()) + ":" +
+    pad(d.getSeconds())
+  );
+}
+
 function log(msg) {
-  const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19);
+  const timestamp = formatLocalDateTime(new Date());
   console.log("[" + timestamp + "] " + msg);
 }
 
@@ -138,6 +151,7 @@ function logConfigStatus() {
     log("Config: set NTE_ADMIN_TOKEN in .env next to docker-compose.yml, or in " + DATA_DIR + "/.env.server");
   }
   log("Config: listening on " + CONFIG.host + ":" + CONFIG.port);
+  log("Config: log timezone " + Intl.DateTimeFormat().resolvedOptions().timeZone);
 }
 
 bootstrapEnvFiles();

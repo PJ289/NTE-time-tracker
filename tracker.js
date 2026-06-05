@@ -173,10 +173,32 @@ function formatTime(seconds) {
 }
 
 /**
+ * Formats a date/time in the PC's local timezone (for logs and UI).
+ */
+function formatLocalDateTime(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  const pad = (n) => String(n).padStart(2, '0');
+  return (
+    d.getFullYear() + '-' +
+    pad(d.getMonth() + 1) + '-' +
+    pad(d.getDate()) + ' ' +
+    pad(d.getHours()) + ':' +
+    pad(d.getMinutes()) + ':' +
+    pad(d.getSeconds())
+  );
+}
+
+function localDateKey(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  const pad = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+}
+
+/**
  * Logs a message with timestamp
  */
 function log(msg) {
-  const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const timestamp = formatLocalDateTime(new Date());
   const line = '[' + timestamp + '] ' + msg;
   const showConsole = !IS_SEA || envFlag('NTE_CONSOLE_LOG', false);
   if (showConsole) console.log(line);
@@ -292,6 +314,9 @@ function loadClientState() {
     lastSyncTime: null
   };
   const state = readJsonFile(CONFIG.clientStateFile, fallback) || fallback;
+
+  if (state.deviceId) state.deviceId = String(state.deviceId).trim();
+  if (state.deviceToken) state.deviceToken = String(state.deviceToken).trim();
 
   if (process.env.NTE_DEVICE_ID && String(process.env.NTE_DEVICE_ID).trim()) {
     state.deviceId = String(process.env.NTE_DEVICE_ID).trim();
@@ -503,6 +528,22 @@ function buildAuthHeaders() {
   };
 }
 
+function hasEnvDeviceCredentials() {
+  const envId = process.env.NTE_DEVICE_ID && String(process.env.NTE_DEVICE_ID).trim();
+  const envToken = process.env.NTE_DEVICE_TOKEN && String(process.env.NTE_DEVICE_TOKEN).trim();
+  return Boolean(envId && envToken);
+}
+
+function canAutoReregisterOnAuthFailure() {
+  return CONFIG.deviceAutoRegister && !hasEnvDeviceCredentials();
+}
+
+function clearStoredDeviceCredentials() {
+  clientState.deviceId = null;
+  clientState.deviceToken = null;
+  saveClientState(clientState);
+}
+
 function getMaxEndTime(sessions, fallback) {
   let max = null;
   for (let i = 0; i < sessions.length; i++) {
@@ -526,17 +567,25 @@ function filterSessionsAfter(sessions, lastEndTime) {
 }
 
 async function fetchLastServerEndTime() {
-  const res = await fetchJson(CONFIG.serverUrl + '/api/devices/' + clientState.deviceId + '/last', {
-    method: 'GET',
-    headers: buildAuthHeaders()
-  });
-
-  if (!res.ok || !res.json) {
-    log('Failed to fetch last server timestamp (' + res.status + ')');
-    return null;
+  if (!clientState.deviceId || !clientState.deviceToken) {
+    return { lastEndTime: null, status: 0 };
   }
 
-  return res.json.lastEndTime || null;
+  const res = await fetchJson(
+    CONFIG.serverUrl + '/api/devices/' + encodeURIComponent(clientState.deviceId) + '/last',
+    {
+      method: 'GET',
+      headers: buildAuthHeaders()
+    }
+  );
+
+  if (!res.ok || !res.json) {
+    const deviceHint = clientState.deviceId ? ', device ' + clientState.deviceId.slice(0, 8) + '...' : '';
+    log('Failed to fetch last server timestamp (' + res.status + ')' + deviceHint);
+    return { lastEndTime: null, status: res.status || 0 };
+  }
+
+  return { lastEndTime: res.json.lastEndTime || null, status: res.status };
 }
 
 async function syncWithServer(reason) {
@@ -554,7 +603,16 @@ async function syncWithServer(reason) {
     const ready = await ensureDeviceRegistered();
     if (!ready) return;
 
-    const serverLastEndTime = await fetchLastServerEndTime();
+    let lastFetch = await fetchLastServerEndTime();
+    if (lastFetch.status === 401 && canAutoReregisterOnAuthFailure()) {
+      log('Server rejected stored credentials; clearing client.json and re-registering...');
+      clearStoredDeviceCredentials();
+      if (await ensureDeviceRegistered()) {
+        lastFetch = await fetchLastServerEndTime();
+      }
+    }
+
+    const serverLastEndTime = lastFetch.lastEndTime;
     const syncCutoff = resolveSyncCutoff(serverLastEndTime, clientState.lastServerEndTime);
     const queueCandidates = filterSessionsAfter(uploadQueue, syncCutoff);
     const localCandidates = filterSessionsAfter(data.sessions || [], syncCutoff);
@@ -586,6 +644,30 @@ async function syncWithServer(reason) {
       headers: buildAuthHeaders(),
       body: JSON.stringify(payload)
     });
+
+    if (res.status === 401 && canAutoReregisterOnAuthFailure()) {
+      log('Sync auth failed (401); clearing client.json and re-registering...');
+      clearStoredDeviceCredentials();
+      if (await ensureDeviceRegistered()) {
+        payload.deviceId = clientState.deviceId;
+        const retry = await fetchJson(CONFIG.serverUrl + '/api/sessions/bulk', {
+          method: 'POST',
+          headers: buildAuthHeaders(),
+          body: JSON.stringify(payload)
+        });
+        if (retry.ok) {
+          const newLastEnd = getMaxEndTime(combined, syncCutoff);
+          clientState.lastServerEndTime = newLastEnd;
+          clientState.lastSyncTime = nowIso();
+          saveClientState(clientState);
+          pruneQueueAfter(newLastEnd);
+          log('Sync ok (' + reason + ', after re-register): ' + combined.length + ' sessions');
+          return;
+        }
+        log('Sync failed (' + retry.status + ') after re-register for ' + combined.length + ' sessions');
+        return;
+      }
+    }
 
     if (!res.ok) {
       log('Sync failed (' + res.status + ') for ' + combined.length + ' sessions');
@@ -656,7 +738,7 @@ async function checkForUpdates() {
   if (typeof fetch !== 'function') return;
   try {
     if (!clientState) clientState = loadClientState();
-    const todayKey = new Date().toISOString().slice(0, 10);
+    const todayKey = localDateKey(new Date());
     if (clientState.lastUpdateCheck === todayKey) return;
 
     const controller = new AbortController();
@@ -768,21 +850,25 @@ function openLogsWindow() {
     '<title>NTE Tracker Logs</title>',
     '<hta:application id="nteLogs" applicationname="NTE Tracker Logs" border="thin" caption="yes" maximizebutton="yes" minimizebutton="yes" sysmenu="yes" scroll="no" singleinstance="no" />',
     '<style>',
-    'body{font-family:Segoe UI,Arial,sans-serif;margin:0;background:#111;color:#eee;}',
-    '#bar{height:44px;padding:8px;background:#1f1f1f;box-sizing:border-box;}',
-    'button{height:28px;margin-right:8px;}',
-    '#log{position:absolute;left:0;right:0;top:44px;bottom:0;width:100%;height:calc(100% - 44px);box-sizing:border-box;background:#0b0b0b;color:#ddd;border:0;padding:10px;font-family:Consolas,monospace;font-size:12px;white-space:pre;overflow:scroll;}',
+    'body{font-family:Segoe UI,Arial,sans-serif;margin:0;background:#111;color:#e8e8e8;}',
+    '#bar{height:44px;padding:8px 12px;background:#1a1a1a;border-bottom:1px solid #2a2a2a;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;}',
+    '#status{font-size:12px;color:#888;}',
+    'button{height:28px;margin-right:8px;background:#2a2a2a;color:#eee;border:1px solid #444;border-radius:4px;padding:0 12px;cursor:pointer;}',
+    'button:hover{background:#333;}',
+    '#log{position:absolute;left:0;right:0;top:44px;bottom:0;width:100%;height:calc(100% - 44px);box-sizing:border-box;background:#0b0b0b;color:#c8c8c8;border:0;padding:10px;font-family:Consolas,monospace;font-size:12px;white-space:pre;overflow:scroll;}',
     '</style>',
     '<script language="javascript">',
     'var logPath=' + jsLiteral(logPath) + ';',
+    'var refreshTimer=null;',
     'function readUtf8(path){try{var s=new ActiveXObject("ADODB.Stream");s.Type=2;s.Charset="utf-8";s.Open();s.LoadFromFile(path);var t=s.ReadText();s.Close();return t;}catch(e){return "Unable to read log: "+e.message;}}',
-    'function refreshLog(){var el=document.getElementById("log");el.value=readUtf8(logPath);el.scrollTop=el.scrollHeight;}',
+    'function refreshLog(){var el=document.getElementById("log");el.value=readUtf8(logPath);el.scrollTop=el.scrollHeight;var st=document.getElementById("status");if(st){var d=new Date();st.innerText="Auto-refresh every 2s | Last update "+d.toLocaleTimeString();}}',
     'function openLocation(){new ActiveXObject("WScript.Shell").Run("explorer.exe /select,\\"" + logPath + "\\"",1,false);}',
-    'window.onload=function(){window.resizeTo(920,680);refreshLog();window.focus();};',
+    'window.onload=function(){window.resizeTo(920,680);refreshLog();refreshTimer=window.setInterval(refreshLog,2000);window.focus();};',
+    'window.onbeforeunload=function(){if(refreshTimer){window.clearInterval(refreshTimer);}};',
     '</script>',
     '</head>',
     '<body>',
-    '<div id="bar"><button onclick="refreshLog()">Refresh</button><button onclick="openLocation()">Open file location</button></div>',
+    '<div id="bar"><div><button onclick="refreshLog()">Refresh now</button><button onclick="openLocation()">Open file location</button></div><div id="status">Auto-refresh every 2s</div></div>',
     '<textarea id="log" readonly></textarea>',
     '</body>',
     '</html>'
@@ -793,6 +879,7 @@ function openLogsWindow() {
 
 function openConfigWindow() {
   const cfgPath = path.join(APP_ROOT, '.env.client');
+  const clientJsonPath = CONFIG.clientStateFile;
   if (!fs.existsSync(cfgPath)) {
     fs.writeFileSync(cfgPath, '# NTE Tracker client config\r\n# NTE_SERVER_URL=http://192.168.1.10:28183\r\n', 'utf8');
   }
@@ -813,20 +900,20 @@ function openConfigWindow() {
   ];
 
   const fields = [
-    ['Server URL', 'NTE_SERVER_URL', 'text'],
-    ['Device name', 'NTE_DEVICE_NAME', 'text'],
-    ['Device type', 'NTE_DEVICE_TYPE', 'text'],
-    ['Device ID', 'NTE_DEVICE_ID', 'text'],
-    ['Device token', 'NTE_DEVICE_TOKEN', 'password']
+    ['Server URL', 'NTE_SERVER_URL', 'text', 'Base URL of your server, e.g. http://192.168.1.10:28183. No trailing slash. Use HTTP for local sync unless this PC trusts your HTTPS certificate.'],
+    ['Device name', 'NTE_DEVICE_NAME', 'text', 'Label shown on the server dashboard. Leave empty to use your PC hostname.'],
+    ['Device type', 'NTE_DEVICE_TYPE', 'text', 'Category sent to the server. Usually leave as pc.'],
+    ['Device ID', 'NTE_DEVICE_ID', 'text', 'Fixed device ID for linking to existing server data. After auto-register, the active ID is stored in client.json and shown here if not set in .env.client.'],
+    ['Device token', 'NTE_DEVICE_TOKEN', 'password', 'Secret token paired with Device ID. After auto-register, the active token is stored in client.json and shown here if not set in .env.client.']
   ];
   const checks = [
-    ['Mark as test device', 'NTE_DEVICE_IS_TEST', false],
-    ['Auto-register device', 'NTE_DEVICE_AUTO_REGISTER', true],
-    ['Sync on startup', 'NTE_SYNC_ON_START', true],
-    ['Sync after session', 'NTE_SYNC_ON_END', true],
-    ['Local dashboard', 'NTE_LOCAL_DASHBOARD', true],
-    ['Tray in node mode', 'NTE_TRAY', false],
-    ['Console debug logs', 'NTE_CONSOLE_LOG', false]
+    ['Mark as test device', 'NTE_DEVICE_IS_TEST', false, 'Sessions appear as test data on the server. Use only for experiments.'],
+    ['Auto-register device', 'NTE_DEVICE_AUTO_REGISTER', true, 'Register this PC automatically on first sync. Disable when using a fixed Device ID + token.'],
+    ['Sync on startup', 'NTE_SYNC_ON_START', true, 'Upload pending sessions when the tracker starts. Recommended when server sync is enabled.'],
+    ['Sync after session', 'NTE_SYNC_ON_END', true, 'Upload after each gaming session ends. Recommended for near real-time server updates.'],
+    ['Local dashboard', 'NTE_LOCAL_DASHBOARD', true, 'Keep http://127.0.0.1:27183 on this PC. Disable if you only use the remote server dashboard.'],
+    ['Tray in node mode', 'NTE_TRAY', false, 'Show the tray icon when running with node tracker.js. Always enabled for nte-tracker.exe.'],
+    ['Console debug logs', 'NTE_CONSOLE_LOG', false, 'Show a console window with live output. Useful for debugging only.']
   ];
 
   const html = [
@@ -837,18 +924,29 @@ function openConfigWindow() {
     '<title>NTE Tracker Settings</title>',
     '<hta:application id="nteSettings" applicationname="NTE Tracker Settings" border="thin" caption="yes" maximizebutton="no" minimizebutton="yes" sysmenu="yes" scroll="yes" singleinstance="no" />',
     '<style>',
-    'body{font-family:Segoe UI,Arial,sans-serif;margin:16px;background:#f5f5f5;color:#222;}',
-    'h1{font-size:18px;margin:0 0 12px 0;}',
-    '.row{display:flex;align-items:center;margin:8px 0;}',
-    '.row label{width:180px;font-weight:600;}',
-    'input[type=text],input[type=password]{flex:1;padding:6px;border:1px solid #aaa;border-radius:3px;}',
-    '.check label{width:auto;font-weight:400;}',
-    '.actions{margin-top:16px;text-align:right;}',
-    'button{padding:6px 14px;margin-left:8px;}',
-    '.hint{color:#666;font-size:12px;margin-top:10px;}',
+    'body{font-family:Segoe UI,Arial,sans-serif;margin:0;background:#111;color:#e8e8e8;}',
+    '.wrap{padding:16px 18px 18px 18px;}',
+    'h1{font-size:18px;margin:0 0 6px 0;color:#fff;}',
+    '.intro{color:#888;font-size:12px;margin:0 0 16px 0;}',
+    '.field{margin:0 0 14px 0;padding-bottom:12px;border-bottom:1px solid #222;}',
+    '.row{display:flex;align-items:center;margin:0 0 4px 0;}',
+    '.row label{width:180px;font-weight:600;color:#ddd;}',
+    'input[type=text],input[type=password]{flex:1;padding:7px 8px;background:#1a1a1a;color:#eee;border:1px solid #333;border-radius:4px;}',
+    'input[type=text]:focus,input[type=password]:focus{outline:none;border-color:#4db8ff;}',
+    '.check .row{align-items:flex-start;}',
+    '.check label{width:auto;font-weight:600;color:#ddd;}',
+    '.help{color:#888;font-size:12px;line-height:1.45;margin:0 0 0 180px;}',
+    '.check .help{margin-left:24px;}',
+    '.actions{margin-top:18px;text-align:right;padding-top:12px;border-top:1px solid #222;}',
+    'button{padding:7px 14px;margin-left:8px;background:#2a2a2a;color:#eee;border:1px solid #444;border-radius:4px;cursor:pointer;}',
+    'button:hover{background:#333;}',
+    'button.primary{background:#2563eb;border-color:#2563eb;color:#fff;}',
+    'button.primary:hover{background:#1d4ed8;}',
+    '.hint{color:#777;font-size:12px;margin-top:12px;}',
     '</style>',
     '<script language="javascript">',
     'var cfgPath=' + jsLiteral(cfgPath) + ';',
+    'var clientJsonPath=' + jsLiteral(clientJsonPath) + ';',
     'var knownKeys=' + JSON.stringify(knownKeys) + ';',
     'var fields=' + JSON.stringify(fields) + ';',
     'var checks=' + JSON.stringify(checks) + ';',
@@ -857,15 +955,20 @@ function openConfigWindow() {
     'function writeUtf8(path,text){var s=new ActiveXObject("ADODB.Stream");s.Type=2;s.Charset="utf-8";s.Open();s.WriteText(text);s.SaveToFile(path,2);s.Close();}',
     'function isTrue(v){v=String(v||"").toLowerCase();return v==="1"||v==="true"||v==="yes"||v==="y";}',
     'function parseEnv(){var raw=readUtf8(cfgPath);var lines=raw.split(/\\r?\\n/);for(var i=0;i<lines.length;i++){var line=lines[i];var t=line.replace(/^\\s+|\\s+$/g,"");if(!t||t.charAt(0)==="#"||line.indexOf("=")<0){extras.push(line);continue;}var idx=line.indexOf("=");var k=line.substring(0,idx).replace(/^\\s+|\\s+$/g,"");var v=line.substring(idx+1).replace(/^\\s+|\\s+$/g,"");if(v.length>=2&&((v.charAt(0)==="\\""&&v.charAt(v.length-1)==="\\"")||(v.charAt(0)==="\\\'"&&v.charAt(v.length-1)==="\\\'")))v=v.substring(1,v.length-1);if(knownKeys.indexOf(k)>=0)values[k]=v;else extras.push(line);}}',
-    'function build(){parseEnv();var root=document.getElementById("fields");for(var i=0;i<fields.length;i++){var f=fields[i];var row=document.createElement("div");row.className="row";row.innerHTML="<label>"+f[0]+"</label><input id=\\""+f[1]+"\\" type=\\""+f[2]+"\\" />";root.appendChild(row);document.getElementById(f[1]).value=values[f[1]]||"";}for(var j=0;j<checks.length;j++){var c=checks[j];var row2=document.createElement("div");row2.className="row check";row2.innerHTML="<label><input id=\\""+c[1]+"\\" type=\\"checkbox\\" /> "+c[0]+"</label>";root.appendChild(row2);document.getElementById(c[1]).checked=values.hasOwnProperty(c[1])?isTrue(values[c[1]]):c[2];}window.resizeTo(740,620);window.focus();}',
+    'function readClientJson(){try{var raw=readUtf8(clientJsonPath);if(!raw)return null;return JSON.parse(raw);}catch(e){return null;}}',
+    'function applyClientJsonFallback(){var cj=readClientJson();if(!cj)return;if(!values.NTE_DEVICE_ID&&cj.deviceId)values.NTE_DEVICE_ID=String(cj.deviceId);if(!values.NTE_DEVICE_TOKEN&&cj.deviceToken)values.NTE_DEVICE_TOKEN=String(cj.deviceToken);}',
+    'function build(){parseEnv();applyClientJsonFallback();var root=document.getElementById("fields");for(var i=0;i<fields.length;i++){var f=fields[i];var block=document.createElement("div");block.className="field";block.innerHTML="<div class=\\"row\\"><label for=\\""+f[1]+"\\">"+f[0]+"</label><input id=\\""+f[1]+"\\" type=\\""+f[2]+"\\" /></div><div class=\\"help\\">"+f[3]+"</div>";root.appendChild(block);document.getElementById(f[1]).value=values[f[1]]||"";}for(var j=0;j<checks.length;j++){var c=checks[j];var block2=document.createElement("div");block2.className="field check";block2.innerHTML="<div class=\\"row\\"><label><input id=\\""+c[1]+"\\" type=\\"checkbox\\" /> "+c[0]+"</label></div><div class=\\"help\\">"+c[3]+"</div>";root.appendChild(block2);document.getElementById(c[1]).checked=values.hasOwnProperty(c[1])?isTrue(values[c[1]]):c[2];}window.resizeTo(760,680);window.focus();}',
     'function save(){var lines=["# NTE Tracker client config","# Generated by tray settings UI"];for(var i=0;i<fields.length;i++){var f=fields[i];var v=document.getElementById(f[1]).value.replace(/^\\s+|\\s+$/g,"");if(v)lines.push(f[1]+"="+v);}for(var j=0;j<checks.length;j++){var c=checks[j];lines.push(c[1]+"="+(document.getElementById(c[1]).checked?"1":"0"));}lines.push("");for(var k=0;k<extras.length;k++){var line=extras[k];var t=line.replace(/^\\s+|\\s+$/g,"");if(!t||t.charAt(0)==="#"||line.indexOf("=")<0)continue;var key=line.substring(0,line.indexOf("=")).replace(/^\\s+|\\s+$/g,"");if(knownKeys.indexOf(key)<0)lines.push(line);}writeUtf8(cfgPath,lines.join("\\r\\n"));alert("Settings saved. Restart the tracker to apply changes.");window.close();}',
     '</script>',
     '</head>',
     '<body onload="build()">',
+    '<div class="wrap">',
     '<h1>NTE Tracker Settings</h1>',
+    '<p class="intro">Edit .env.client options below. Changes apply after restarting the tracker.</p>',
     '<div id="fields"></div>',
-    '<div class="hint">Saved changes apply after restarting the tracker.</div>',
-    '<div class="actions"><button onclick="save()">Save</button><button onclick="window.close()">Cancel</button></div>',
+    '<div class="hint">Tip: leave Server URL empty for local-only tracking. Device credentials after auto-register live in client.json; a 401 usually means the server URL changed or the token is no longer valid on that server.</div>',
+    '<div class="actions"><button class="primary" onclick="save()">Save</button><button onclick="window.close()">Cancel</button></div>',
+    '</div>',
     '</body>',
     '</html>'
   ].join('\r\n');
