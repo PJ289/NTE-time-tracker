@@ -56,20 +56,27 @@ function isServerDashboard() {
 
 function applyDashboardMode() {
   var filterBar = document.querySelector(".filter-bar");
-  if (filterBar) filterBar.style.display = isLocalDashboard ? "none" : "";
+  if (filterBar) filterBar.style.display = "";
 
   document.querySelectorAll('.tab-btn[data-tab="devices"], .tab-btn[data-tab="config"]').forEach(function (btn) {
     btn.style.display = isLocalDashboard ? "none" : "";
   });
 
   var sessionTools = document.querySelector("#tab-all .session-tools");
-  if (sessionTools) sessionTools.style.display = isLocalDashboard ? "none" : "";
+  if (sessionTools) sessionTools.style.display = "";
+
+  var selectionGroup = document.getElementById("session-tools-selection");
+  if (selectionGroup) selectionGroup.style.display = isLocalDashboard ? "none" : "";
+
+  var testToolsGroup = document.getElementById("session-tools-test");
+  if (testToolsGroup) testToolsGroup.style.display = "";
+
+  var pagingGroup = document.getElementById("session-tools-paging");
+  if (pagingGroup) pagingGroup.style.display = "";
 
   var manualPanel = document.querySelector("#tab-all .manual-panel");
   if (manualPanel) manualPanel.style.display = isLocalDashboard ? "none" : "";
 
-  var deleteTestBtn = document.getElementById("delete-test-btn");
-  if (deleteTestBtn) deleteTestBtn.style.display = isLocalDashboard ? "none" : "";
 
   var banner = document.getElementById("local-dashboard-note");
   if (isLocalDashboard) {
@@ -200,12 +207,10 @@ function renderDeviceFilter() {
   allOpt.textContent = "All devices";
   select.appendChild(allOpt);
 
-  if (isServerDashboard()) {
-    var testOpt = document.createElement("option");
-    testOpt.value = "__test__";
-    testOpt.textContent = "Test sessions only";
-    select.appendChild(testOpt);
-  }
+  var testOpt = document.createElement("option");
+  testOpt.value = "__test__";
+  testOpt.textContent = "Test sessions only";
+  select.appendChild(testOpt);
 
   if (allDevices && allDevices.length) {
     for (var i = 0; i < allDevices.length; i++) {
@@ -1411,9 +1416,32 @@ function combineSelectedSessions() {
 }
 
 function deleteAllTestSessions() {
-  if (!requireAdminAction()) return;
-  if (!confirm("Delete all sessions marked as TEST on the server? This cannot be undone.")) return;
   var status = document.getElementById("combine-status");
+  var confirmMsg = isLocalDashboard
+    ? "Delete all sessions marked as TEST on this PC? This cannot be undone."
+    : "Delete all sessions marked as TEST on the server? This cannot be undone.";
+  if (!confirm(confirmMsg)) return;
+
+  if (isLocalDashboard) {
+    fetch("/api/sessions/test", { method: "DELETE" })
+      .then(function (res) { return res.text().then(function (text) {
+        var json = null;
+        try { json = text ? JSON.parse(text) : null; } catch (e) { json = null; }
+        return { ok: res.ok, json: json };
+      }); })
+      .then(function (res) {
+        if (!res.ok) throw new Error((res.json && res.json.error) || "Delete failed");
+        var count = res.json && typeof res.json.deleted === "number" ? res.json.deleted : 0;
+        if (status) status.textContent = "Deleted " + count + " test session(s)";
+        return refreshDashboardData();
+      })
+      .catch(function (err) {
+        if (status) status.textContent = err.message;
+      });
+    return;
+  }
+
+  if (!requireAdminAction()) return;
   apiRequest("/api/sessions/test", "DELETE", null, true)
     .then(function (res) {
       if (!res.ok) throw new Error((res.json && res.json.error) || "Delete failed");
@@ -1676,7 +1704,8 @@ function normalizeData(DATA) {
 
 function applyData(DATA) {
   DATA = normalizeData(DATA);
-  isLocalDashboard = DATA.dashboardMode === "local";
+  if (DATA.dashboardMode === "local") isLocalDashboard = true;
+  else if (DATA.dashboardMode === "server") isLocalDashboard = false;
   applyDashboardMode();
   allSessions = DATA.sessions;
   allDevices = DATA.devices || [];
@@ -1850,7 +1879,7 @@ fetch("/data")
     var clearBtn = document.getElementById("clear-selection");
     if (clearBtn && !isLocalDashboard) clearBtn.onclick = clearSelection;
     var deleteTestBtn = document.getElementById("delete-test-btn");
-    if (deleteTestBtn && !isLocalDashboard) deleteTestBtn.onclick = deleteAllTestSessions;
+    if (deleteTestBtn) deleteTestBtn.onclick = deleteAllTestSessions;
 
     updatePageSizeSelect();
     var pageSelect = document.getElementById("page-select");

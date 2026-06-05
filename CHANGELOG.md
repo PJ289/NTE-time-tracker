@@ -16,7 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Local dashboard UI**: `/data` includes `dashboardMode: local`; hides server-only tabs (Devices, Config), device filter, and session admin tools. Server dashboard unchanged (`dashboardMode: server`).
 - **Session-end notification**: tray balloon when a gaming session ends shows session, today, and total playtime (`NTE_SESSION_END_NOTIFY` in Edit Config; on by default).
 - **Test session uploads (client)**: `NTE_SESSIONS_AS_TEST` marks synced sessions with a TEST badge on the server (`Mark synced sessions as test` in Edit Config).
-- **Test sessions (server dashboard)**: filter **Test sessions only**; admin **Delete Test Sessions** removes all `is_test` rows (`DELETE /api/sessions/test`). Requires server DB schema v3 (auto-migrates on start).
+- **Test sessions (local + server dashboard)**: `NTE_SESSIONS_AS_TEST` also tags local `data.json` sessions; filter **Test sessions only** and **Delete Test Sessions** work on the local dashboard (`DELETE /api/sessions/test` on port 27183) and on the server (admin token). Server requires DB schema v3 (auto-migrates on start).
+- **Local dashboard UI after live session-end**: SSE `session-end` now sends full `getDashboardData()` so `dashboardMode: local` is not lost; test delete + paging stay visible on reload (selection/combine remain server-only).
 
 ### Changed
 - **Minimum session length (client)**: default raised from 30 s to **5 min** (`300` s); quick logins are not saved, synced, or notified. Configurable in Edit Config or via `NTE_MIN_SESSION_SECONDS` in `.env.client`.

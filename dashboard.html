@@ -61,14 +61,17 @@
     <div id="tab-all" class="tab-content">
       <div class="session-tools">
         <div class="session-tools-row">
-          <div class="session-tools-group">
+          <div id="session-tools-selection" class="session-tools-group">
             <span class="session-tools-label">Selection</span>
             <button id="combine-btn" class="session-tool-btn">Combine Selected</button>
             <button id="clear-selection" class="session-tool-btn ghost">Clear</button>
+          </div>
+          <div id="session-tools-test" class="session-tools-group">
+            <span class="session-tools-label">Test data</span>
             <button id="delete-test-btn" class="session-tool-btn danger">Delete Test Sessions</button>
             <span id="combine-status" class="session-tools-status"></span>
           </div>
-          <div class="session-tools-group">
+          <div id="session-tools-paging" class="session-tools-group">
             <span class="session-tools-label">Paging</span>
             <label for="page-select" class="paging-label">Page</label>
             <input id="page-select" class="paging-control" type="number" min="1" step="1">

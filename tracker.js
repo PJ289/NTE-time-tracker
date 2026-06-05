@@ -390,11 +390,11 @@ function loadData() {
         log('Detected active session from previous run - finalizing');
         const sessionDuration = parsed.activeSession.duration;
         parsed.totalSeconds += sessionDuration;
-        parsed.sessions.push({
-          startTime: parsed.activeSession.startTime,
-          endTime: parsed.activeSession.lastUpdateTime,
-          duration: sessionDuration
-        });
+        parsed.sessions.push(createTrackedSession(
+          parsed.activeSession.startTime,
+          parsed.activeSession.lastUpdateTime,
+          sessionDuration
+        ));
         delete parsed.activeSession;
       }
 
@@ -511,12 +511,51 @@ function enqueueSession(session) {
       if (existingRange && sessionsOverlapMs(existingRange, range)) return;
     }
   }
-  uploadQueue.push({
+  const queued = {
     startTime: session.startTime,
     endTime: session.endTime,
     duration: session.duration
-  });
+  };
+  if (session.isTest) queued.isTest = true;
+  uploadQueue.push(queued);
   saveQueue(uploadQueue);
+}
+
+function createTrackedSession(startTime, endTime, duration) {
+  const session = {
+    startTime: startTime,
+    endTime: endTime,
+    duration: duration
+  };
+  if (CONFIG.sessionsAsTest) session.isTest = true;
+  return session;
+}
+
+function deleteLocalTestSessions() {
+  if (!data || !Array.isArray(data.sessions)) return 0;
+  let removedDuration = 0;
+  let removed = 0;
+  data.sessions = data.sessions.filter(function (s) {
+    if (s && s.isTest) {
+      removed++;
+      removedDuration += s.duration || 0;
+      return false;
+    }
+    return true;
+  });
+  if (!removed) return 0;
+
+  data.totalSeconds = Math.max(CONFIG.initialOffset, data.totalSeconds - removedDuration);
+  if (uploadQueue && uploadQueue.length) {
+    uploadQueue = uploadQueue.filter(function (s) { return !s || !s.isTest; });
+    saveQueue(uploadQueue);
+  }
+  saveData(false);
+  writePlaytimeLog();
+  writeTrayStatus();
+  broadcastSSE('data', getDashboardData());
+  log('Deleted ' + removed + ' local test session(s)');
+  return removed;
 }
 
 function sessionRangeMs(session) {
@@ -1421,7 +1460,7 @@ function openConfigWindow() {
   ];
   const checks = [
     ['Mark as test device', 'NTE_DEVICE_IS_TEST', false, 'Only when auto-registering a new device: marks the whole device as test on the server.'],
-    ['Mark synced sessions as test', 'NTE_SESSIONS_AS_TEST', false, 'While enabled, sessions uploaded to the server get a TEST badge (filter and bulk-delete on the server dashboard). Restart to apply.'],
+    ['Mark synced sessions as test', 'NTE_SESSIONS_AS_TEST', false, 'While enabled, new sessions are tagged TEST locally and on the server. Filter and Delete Test Sessions on both dashboards. Restart to apply.'],
     ['Auto-register device', 'NTE_DEVICE_AUTO_REGISTER', true, 'Register this PC only when Device ID and token are empty. Ignored if credentials exist in .env.client or client.json. Turn off when using a fixed device.'],
     ['Sync on startup', 'NTE_SYNC_ON_START', true, 'Upload pending sessions when the tracker starts. Recommended when server sync is enabled.'],
     ['Sync after session', 'NTE_SYNC_ON_END', true, 'Upload after each gaming session ends. Recommended for near real-time server updates.'],
@@ -2228,6 +2267,12 @@ function startServer() {
         res.end(JSON.stringify(getDashboardData()));
         return;
       }
+      if (req.method === 'DELETE' && urlPath === '/api/sessions/test') {
+        const deleted = deleteLocalTestSessions();
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
+        res.end(JSON.stringify({ ok: true, deleted: deleted }));
+        return;
+      }
       if (req.method === 'GET' && urlPath === '/events') {
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
@@ -2290,11 +2335,11 @@ function handleShutdown() {
   if (isGameRunning && sessionStartTime) {
     const sessionDuration = Math.floor((Date.now() - sessionStartTime) / 1000);
     if (sessionDuration >= CONFIG.minSessionDuration) {
-      const session = {
-        startTime: new Date(sessionStartTime).toISOString(),
-        endTime: new Date().toISOString(),
-        duration: sessionDuration
-      };
+      const session = createTrackedSession(
+        new Date(sessionStartTime).toISOString(),
+        new Date().toISOString(),
+        sessionDuration
+      );
       data.totalSeconds += sessionDuration;
       data.sessions.push(session);
       enqueueSession(session);
@@ -2329,11 +2374,11 @@ function pollProcess() {
       const sessionDuration = Math.floor((Date.now() - sessionStartTime) / 1000);
 
       if (sessionDuration >= CONFIG.minSessionDuration) {
-        const session = {
-          startTime: new Date(sessionStartTime).toISOString(),
-          endTime: new Date().toISOString(),
-          duration: sessionDuration
-        };
+        const session = createTrackedSession(
+          new Date(sessionStartTime).toISOString(),
+          new Date().toISOString(),
+          sessionDuration
+        );
         data.totalSeconds += sessionDuration;
         data.sessions.push(session);
         enqueueSession(session);
@@ -2342,20 +2387,12 @@ function pollProcess() {
         log('Game stopped - session: ' + formatTime(sessionDuration) + ', total: ' + formatTime(data.totalSeconds));
         showSessionEndNotification(sessionDuration, data.totalSeconds);
         writePlaytimeLog();
-        broadcastSSE('session-end', {
-          totalSeconds: data.totalSeconds,
-          sessions: data.sessions,
-          initialOffset: CONFIG.initialOffset
-        });
+        broadcastSSE('session-end', getDashboardData());
 
         if (CONFIG.syncOnEnd) syncWithServer('session-end');
       } else {
         log('Game stopped - session too short (' + sessionDuration + 's), discarded');
-        broadcastSSE('session-end', {
-          totalSeconds: data.totalSeconds,
-          sessions: data.sessions,
-          initialOffset: CONFIG.initialOffset
-        });
+        broadcastSSE('session-end', getDashboardData());
       }
 
       sessionStartTime = null;
