@@ -10,3 +10,9 @@
 - Do not launch tray GUI helpers with hidden PowerShell WinForms. `windowsHide` / `-WindowStyle Hidden` can hide the form itself. The current approach uses temporary HTA files launched with `mshta.exe` for logs/settings windows without a console.
 - Do not use `exec('notepad.exe ...')` from tray actions; it can create a stray `cmd.exe` window and still fail to show Notepad from the hidden SEA process.
 - `nte-tracker.exe` is expected to be around 80-90 MB because it embeds the Node runtime; do not chase size reductions unless changing packaging architecture.
+
+## Releases: client (exe) vs server (Docker)
+
+- Changes that affect the **PC client** (`tracker.js`, `sea-config.json`, `build-exe.ps1`, tray/install/update behavior, `.env.client` semantics) need a **new version** in `package.json`, a **`CHANGELOG.md` section** (e.g. `[2.2.2]`), and a **GitHub Release** with a rebuilt `nte-tracker.exe` asset so auto-update can pick it up.
+- Changes that affect only the **server/dashboard** (`server.js`, `dashboard.js`, `dashboard.css`, Docker image) do **not** require an exe release; deploy with `docker compose pull` (or your registry workflow) on the host running the server.
+- Do not fold unreleased client fixes into an already-shipped exe version string; bump the client version and document it before publishing.

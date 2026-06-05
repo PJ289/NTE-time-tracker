@@ -340,11 +340,25 @@ function loadClientState() {
   if (state.deviceId) state.deviceId = String(state.deviceId).trim();
   if (state.deviceToken) state.deviceToken = String(state.deviceToken).trim();
 
-  if (process.env.NTE_DEVICE_ID && String(process.env.NTE_DEVICE_ID).trim()) {
-    state.deviceId = String(process.env.NTE_DEVICE_ID).trim();
+  const envId = process.env.NTE_DEVICE_ID && String(process.env.NTE_DEVICE_ID).trim();
+  const envToken = process.env.NTE_DEVICE_TOKEN && String(process.env.NTE_DEVICE_TOKEN).trim();
+
+  if (envId && envToken) {
+    const changed = state.deviceId !== envId || state.deviceToken !== envToken;
+    state.deviceId = envId;
+    state.deviceToken = envToken;
+    saveClientState(state);
+    if (changed) {
+      log('Using device credentials from .env.client (synced to client.json)');
+    }
+    return state;
   }
-  if (process.env.NTE_DEVICE_TOKEN && String(process.env.NTE_DEVICE_TOKEN).trim()) {
-    state.deviceToken = String(process.env.NTE_DEVICE_TOKEN).trim();
+
+  if (envId || envToken) {
+    state.deviceId = envId || null;
+    state.deviceToken = envToken || null;
+    log('Warning: set both NTE_DEVICE_ID and NTE_DEVICE_TOKEN in .env.client — not mixing with client.json');
+    return state;
   }
 
   return state;
@@ -509,11 +523,34 @@ async function fetchJson(url, options) {
   }
 }
 
+function hasDeviceCredentials(state) {
+  const s = state || clientState;
+  return Boolean(s && s.deviceId && s.deviceToken);
+}
+
+function isAutoRegisterAllowed() {
+  if (!CONFIG.deviceAutoRegister) return false;
+  if (hasEnvDeviceCredentials()) return false;
+  if (hasDeviceCredentials(clientState)) return false;
+  return true;
+}
+
+function applyDeviceCredentialPolicy() {
+  if (hasEnvDeviceCredentials()) {
+    CONFIG.deviceAutoRegister = false;
+  }
+}
+
 async function ensureDeviceRegistered() {
   if (!IS_CLIENT_MODE) return false;
-  if (clientState.deviceId && clientState.deviceToken) return true;
-  if (!CONFIG.deviceAutoRegister) {
-    log('Server sync disabled: missing device credentials');
+  if (hasDeviceCredentials(clientState)) {
+    return true;
+  }
+  if (!isAutoRegisterAllowed()) {
+    reportClientSyncError(
+      'Server sync disabled: missing device credentials (auto-register not used when credentials already exist or are set in .env.client)',
+      'no-credentials'
+    );
     return false;
   }
 
@@ -530,7 +567,7 @@ async function ensureDeviceRegistered() {
   });
 
   if (!res.ok || !res.json || !res.json.deviceId || !res.json.token) {
-    log('Device registration failed (' + res.status + ')');
+    reportClientSyncError('Device registration failed (' + res.status + ')', 'register-' + (res.status || 0));
     return false;
   }
 
@@ -554,16 +591,6 @@ function hasEnvDeviceCredentials() {
   const envId = process.env.NTE_DEVICE_ID && String(process.env.NTE_DEVICE_ID).trim();
   const envToken = process.env.NTE_DEVICE_TOKEN && String(process.env.NTE_DEVICE_TOKEN).trim();
   return Boolean(envId && envToken);
-}
-
-function canAutoReregisterOnAuthFailure() {
-  return CONFIG.deviceAutoRegister && !hasEnvDeviceCredentials();
-}
-
-function clearStoredDeviceCredentials() {
-  clientState.deviceId = null;
-  clientState.deviceToken = null;
-  saveClientState(clientState);
 }
 
 function getMaxEndTime(sessions, fallback) {
@@ -602,12 +629,10 @@ async function fetchLastServerEndTime() {
   );
 
   if (!res.ok || !res.json) {
-    const deviceHint = clientState.deviceId ? ', device ' + clientState.deviceId.slice(0, 8) + '...' : '';
-    log('Failed to fetch last server timestamp (' + res.status + ')' + deviceHint);
-    return { lastEndTime: null, status: res.status || 0 };
+    return { lastEndTime: null, status: res.status || 0, failed: true };
   }
 
-  return { lastEndTime: res.json.lastEndTime || null, status: res.status };
+  return { lastEndTime: res.json.lastEndTime || null, status: res.status, failed: false };
 }
 
 async function syncWithServer(reason) {
@@ -626,12 +651,20 @@ async function syncWithServer(reason) {
     if (!ready) return;
 
     let lastFetch = await fetchLastServerEndTime();
-    if (lastFetch.status === 401 && canAutoReregisterOnAuthFailure()) {
-      log('Server rejected stored credentials; clearing client.json and re-registering...');
-      clearStoredDeviceCredentials();
-      if (await ensureDeviceRegistered()) {
-        lastFetch = await fetchLastServerEndTime();
-      }
+    if (lastFetch.status === 401) {
+      reportClientSyncError(
+        'Server auth failed (401); verify Device ID and token. Auto-register will not replace existing credentials.',
+        'auth'
+      );
+      return;
+    }
+
+    if (lastFetch.failed && lastFetch.status !== 401) {
+      const lastKey = lastFetch.status >= 400 ? 'last-' + lastFetch.status : 'last-invalid';
+      const lastMsg = lastFetch.status >= 400
+        ? 'Failed to read server state (' + lastFetch.status + ').'
+        : 'Invalid server response when reading sync state.';
+      reportClientSyncError(lastMsg, lastKey);
     }
 
     const serverLastEndTime = lastFetch.lastEndTime;
@@ -667,32 +700,19 @@ async function syncWithServer(reason) {
       body: JSON.stringify(payload)
     });
 
-    if (res.status === 401 && canAutoReregisterOnAuthFailure()) {
-      log('Sync auth failed (401); clearing client.json and re-registering...');
-      clearStoredDeviceCredentials();
-      if (await ensureDeviceRegistered()) {
-        payload.deviceId = clientState.deviceId;
-        const retry = await fetchJson(CONFIG.serverUrl + '/api/sessions/bulk', {
-          method: 'POST',
-          headers: buildAuthHeaders(),
-          body: JSON.stringify(payload)
-        });
-        if (retry.ok) {
-          const newLastEnd = getMaxEndTime(combined, syncCutoff);
-          clientState.lastServerEndTime = newLastEnd;
-          clientState.lastSyncTime = nowIso();
-          saveClientState(clientState);
-          pruneQueueAfter(newLastEnd);
-          log('Sync ok (' + reason + ', after re-register): ' + combined.length + ' sessions');
-          return;
-        }
-        log('Sync failed (' + retry.status + ') after re-register for ' + combined.length + ' sessions');
-        return;
-      }
+    if (res.status === 401) {
+      reportClientSyncError(
+        'Sync auth failed (401); verify Device ID and token. Auto-register will not replace existing credentials.',
+        'auth'
+      );
+      return;
     }
 
     if (!res.ok) {
-      log('Sync failed (' + res.status + ') for ' + combined.length + ' sessions');
+      reportClientSyncError(
+        'Sync failed (' + res.status + ') for ' + combined.length + ' session(s).',
+        'bulk-' + res.status
+      );
       return;
     }
 
@@ -703,7 +723,13 @@ async function syncWithServer(reason) {
     pruneQueueAfter(newLastEnd);
     log('Sync ok (' + reason + '): ' + combined.length + ' sessions');
   } catch (err) {
-    log('Sync error: ' + err.message);
+    const isTimeout = err && (err.name === 'AbortError' || /aborted/i.test(String(err.message)));
+    reportClientSyncError(
+      isTimeout
+        ? 'Cannot reach server (timeout). Check NTE_SERVER_URL and network.'
+        : 'Cannot connect to server: ' + (err && err.message ? err.message : 'unknown error'),
+      isTimeout ? 'timeout' : 'network'
+    );
   } finally {
     syncInProgress = false;
     if (syncRequested) {
@@ -796,6 +822,31 @@ function signalTrayBalloon(message) {
   } catch (err) {
     log('Tray balloon signal failed: ' + err.message);
   }
+}
+
+const CLIENT_NOTIFY_COOLDOWN_MS = 5 * 60 * 1000;
+let _clientNotifyAt = 0;
+let _clientNotifyKey = '';
+
+function notifyClientIssue(message, key) {
+  if (!IS_CLIENT_MODE || !process.platform.startsWith('win')) return;
+  const notifyKey = key || message;
+  const now = Date.now();
+  if (notifyKey === _clientNotifyKey && now - _clientNotifyAt < CLIENT_NOTIFY_COOLDOWN_MS) return;
+  _clientNotifyKey = notifyKey;
+  _clientNotifyAt = now;
+
+  const text = message.length > 220 ? message.slice(0, 217) + '...' : message;
+  if (TRAY_ENABLED) {
+    signalTrayBalloon('Sync error: ' + text);
+  } else {
+    notifyTray('Sync error: ' + text);
+  }
+}
+
+function reportClientSyncError(message, key) {
+  log(message);
+  notifyClientIssue(message, key);
 }
 
 function showYesNoDialog(message) {
@@ -1075,12 +1126,12 @@ function openConfigWindow() {
     ['Server URL', 'NTE_SERVER_URL', 'text', 'Base URL of your server, e.g. http://192.168.1.10:28183. No trailing slash. Use HTTP for local sync unless this PC trusts your HTTPS certificate.'],
     ['Device name', 'NTE_DEVICE_NAME', 'text', 'Label shown on the server dashboard. Leave empty to use your PC hostname.'],
     ['Device type', 'NTE_DEVICE_TYPE', 'text', 'Category sent to the server. Usually leave as pc.'],
-    ['Device ID', 'NTE_DEVICE_ID', 'text', 'Fixed device ID for linking to existing server data. After auto-register, the active ID is stored in client.json and shown here if not set in .env.client.'],
-    ['Device token', 'NTE_DEVICE_TOKEN', 'password', 'Secret token paired with Device ID. After auto-register, the active token is stored in client.json and shown here if not set in .env.client.']
+    ['Device ID', 'NTE_DEVICE_ID', 'text', 'Fixed device ID from the server. If both ID and token are set here, they override client.json on restart (recommended for legacy/manual linking).'],
+    ['Device token', 'NTE_DEVICE_TOKEN', 'text', 'Device token paired with Device ID. Save both fields; empty token field keeps the value loaded when the form opened. Overrides client.json on restart.']
   ];
   const checks = [
     ['Mark as test device', 'NTE_DEVICE_IS_TEST', false, 'Sessions appear as test data on the server. Use only for experiments.'],
-    ['Auto-register device', 'NTE_DEVICE_AUTO_REGISTER', true, 'Register this PC automatically on first sync. Disable when using a fixed Device ID + token.'],
+    ['Auto-register device', 'NTE_DEVICE_AUTO_REGISTER', true, 'Register this PC only when Device ID and token are empty. Ignored if credentials exist in .env.client or client.json. Turn off when using a fixed device.'],
     ['Sync on startup', 'NTE_SYNC_ON_START', true, 'Upload pending sessions when the tracker starts. Recommended when server sync is enabled.'],
     ['Sync after session', 'NTE_SYNC_ON_END', true, 'Upload after each gaming session ends. Recommended for near real-time server updates.'],
     ['Local dashboard', 'NTE_LOCAL_DASHBOARD', true, 'Keep http://127.0.0.1:27183 on this PC. Disable if you only use the remote server dashboard.'],
@@ -1123,15 +1174,15 @@ function openConfigWindow() {
     'var knownKeys=' + JSON.stringify(knownKeys) + ';',
     'var fields=' + JSON.stringify(fields) + ';',
     'var checks=' + JSON.stringify(checks) + ';',
-    'var values={}; var extras=[];',
+    'var values={}; var extras=[]; var loadedCredentials={id:"",token:""};',
     'function readUtf8(path){try{var s=new ActiveXObject("ADODB.Stream");s.Type=2;s.Charset="utf-8";s.Open();s.LoadFromFile(path);var t=s.ReadText();s.Close();return t;}catch(e){return "";}}',
     'function writeUtf8(path,text){var s=new ActiveXObject("ADODB.Stream");s.Type=2;s.Charset="utf-8";s.Open();s.WriteText(text);s.SaveToFile(path,2);s.Close();}',
     'function isTrue(v){v=String(v||"").toLowerCase();return v==="1"||v==="true"||v==="yes"||v==="y";}',
     'function parseEnv(){var raw=readUtf8(cfgPath);var lines=raw.split(/\\r?\\n/);for(var i=0;i<lines.length;i++){var line=lines[i];var t=line.replace(/^\\s+|\\s+$/g,"");if(!t||t.charAt(0)==="#"||line.indexOf("=")<0){extras.push(line);continue;}var idx=line.indexOf("=");var k=line.substring(0,idx).replace(/^\\s+|\\s+$/g,"");var v=line.substring(idx+1).replace(/^\\s+|\\s+$/g,"");if(v.length>=2&&((v.charAt(0)==="\\""&&v.charAt(v.length-1)==="\\"")||(v.charAt(0)==="\\\'"&&v.charAt(v.length-1)==="\\\'")))v=v.substring(1,v.length-1);if(knownKeys.indexOf(k)>=0)values[k]=v;else extras.push(line);}}',
     'function readClientJson(){try{var raw=readUtf8(clientJsonPath);if(!raw)return null;return JSON.parse(raw);}catch(e){return null;}}',
-    'function applyClientJsonFallback(){var cj=readClientJson();if(!cj)return;if(!values.NTE_DEVICE_ID&&cj.deviceId)values.NTE_DEVICE_ID=String(cj.deviceId);if(!values.NTE_DEVICE_TOKEN&&cj.deviceToken)values.NTE_DEVICE_TOKEN=String(cj.deviceToken);}',
-    'function build(){parseEnv();applyClientJsonFallback();var root=document.getElementById("fields");for(var i=0;i<fields.length;i++){var f=fields[i];var block=document.createElement("div");block.className="field";block.innerHTML="<div class=\\"row\\"><label for=\\""+f[1]+"\\">"+f[0]+"</label><input id=\\""+f[1]+"\\" type=\\""+f[2]+"\\" /></div><div class=\\"help\\">"+f[3]+"</div>";root.appendChild(block);document.getElementById(f[1]).value=values[f[1]]||"";}for(var j=0;j<checks.length;j++){var c=checks[j];var block2=document.createElement("div");block2.className="field check";block2.innerHTML="<div class=\\"row\\"><label><input id=\\""+c[1]+"\\" type=\\"checkbox\\" /> "+c[0]+"</label></div><div class=\\"help\\">"+c[3]+"</div>";root.appendChild(block2);document.getElementById(c[1]).checked=values.hasOwnProperty(c[1])?isTrue(values[c[1]]):c[2];}window.resizeTo(760,680);window.focus();}',
-    'function save(){var lines=["# NTE Tracker client config","# Generated by tray settings UI"];for(var i=0;i<fields.length;i++){var f=fields[i];var v=document.getElementById(f[1]).value.replace(/^\\s+|\\s+$/g,"");if(v)lines.push(f[1]+"="+v);}for(var j=0;j<checks.length;j++){var c=checks[j];lines.push(c[1]+"="+(document.getElementById(c[1]).checked?"1":"0"));}lines.push("");for(var k=0;k<extras.length;k++){var line=extras[k];var t=line.replace(/^\\s+|\\s+$/g,"");if(!t||t.charAt(0)==="#"||line.indexOf("=")<0)continue;var key=line.substring(0,line.indexOf("=")).replace(/^\\s+|\\s+$/g,"");if(knownKeys.indexOf(key)<0)lines.push(line);}writeUtf8(cfgPath,lines.join("\\r\\n"));alert("Settings saved. Restart the tracker to apply changes.");window.close();}',
+    'function applyClientJsonFallback(){var cj=readClientJson();if(!cj)return;if(!values.NTE_DEVICE_ID&&cj.deviceId)values.NTE_DEVICE_ID=String(cj.deviceId);if(!values.NTE_DEVICE_TOKEN&&cj.deviceToken)values.NTE_DEVICE_TOKEN=String(cj.deviceToken);loadedCredentials.id=values.NTE_DEVICE_ID||"";loadedCredentials.token=values.NTE_DEVICE_TOKEN||"";}',
+    'function build(){parseEnv();applyClientJsonFallback();var root=document.getElementById("fields");for(var i=0;i<fields.length;i++){var f=fields[i];var block=document.createElement("div");block.className="field";block.innerHTML="<div class=\\"row\\"><label for=\\""+f[1]+"\\">"+f[0]+"</label><input id=\\""+f[1]+"\\" type=\\""+f[2]+"\\" /></div><div class=\\"help\\">"+f[3]+"</div>";root.appendChild(block);document.getElementById(f[1]).value=values[f[1]]||"";}var hasCreds=Boolean((values.NTE_DEVICE_ID||loadedCredentials.id)&&(values.NTE_DEVICE_TOKEN||loadedCredentials.token));for(var j=0;j<checks.length;j++){var c=checks[j];var block2=document.createElement("div");block2.className="field check";block2.innerHTML="<div class=\\"row\\"><label><input id=\\""+c[1]+"\\" type=\\"checkbox\\" /> "+c[0]+"</label></div><div class=\\"help\\">"+c[3]+"</div>";root.appendChild(block2);var checked=values.hasOwnProperty(c[1])?isTrue(values[c[1]]):c[2];if(c[1]==="NTE_DEVICE_AUTO_REGISTER"&&hasCreds)checked=false;document.getElementById(c[1]).checked=checked;}window.resizeTo(760,680);window.focus();}',
+    'function save(){var lines=["# NTE Tracker client config","# Generated by tray settings UI"];for(var i=0;i<fields.length;i++){var f=fields[i];var v=document.getElementById(f[1]).value.replace(/^\\s+|\\s+$/g,"");if(f[1]==="NTE_DEVICE_ID"&&!v&&loadedCredentials.id)v=loadedCredentials.id;if(f[1]==="NTE_DEVICE_TOKEN"&&!v&&loadedCredentials.token)v=loadedCredentials.token;if(v)lines.push(f[1]+"="+v);}var savedId=(document.getElementById("NTE_DEVICE_ID")&&document.getElementById("NTE_DEVICE_ID").value.replace(/^\\s+|\\s+$/g,""))||loadedCredentials.id;var savedTok=(document.getElementById("NTE_DEVICE_TOKEN")&&document.getElementById("NTE_DEVICE_TOKEN").value.replace(/^\\s+|\\s+$/g,""))||loadedCredentials.token;for(var j=0;j<checks.length;j++){var c=checks[j];var checked=document.getElementById(c[1]).checked;if(c[1]==="NTE_DEVICE_AUTO_REGISTER"&&savedId&&savedTok)checked=false;lines.push(c[1]+"="+(checked?"1":"0"));}lines.push("");for(var k=0;k<extras.length;k++){var line=extras[k];var t=line.replace(/^\\s+|\\s+$/g,"");if(!t||t.charAt(0)==="#"||line.indexOf("=")<0)continue;var key=line.substring(0,line.indexOf("=")).replace(/^\\s+|\\s+$/g,"");if(knownKeys.indexOf(key)<0)lines.push(line);}writeUtf8(cfgPath,lines.join("\\r\\n"));var msg="Settings saved. Restart the tracker to apply changes.";if(savedId&&savedTok)msg+="\\n\\nDevice ID/token in .env.client override client.json on restart. Auto-register is off while both are set.";}alert(msg);window.close();}',
     '</script>',
     '</head>',
     '<body onload="build()">',
@@ -1139,7 +1190,7 @@ function openConfigWindow() {
     '<h1>NTE Tracker Settings</h1>',
     '<p class="intro">Edit .env.client options below. Changes apply after restarting the tracker.</p>',
     '<div id="fields"></div>',
-    '<div class="hint">Tip: leave Server URL empty for local-only tracking. Device credentials after auto-register live in client.json; a 401 usually means the server URL changed or the token is no longer valid on that server.</div>',
+    '<div class="hint">Tip: auto-register stores credentials in client.json only. To use a fixed device, set Device ID + token here and disable Auto-register, then restart. .env.client wins over client.json when both ID and token are set.</div>',
     '<div class="actions"><button class="primary" onclick="save()">Save</button><button onclick="window.close()">Cancel</button></div>',
     '</div>',
     '</body>',
@@ -1980,6 +2031,7 @@ if (CLI_INSTALL) {
 
   if (IS_CLIENT_MODE) {
     clientState = loadClientState();
+    applyDeviceCredentialPolicy();
     uploadQueue = loadQueue();
     if (CONFIG.syncOnStart && !CLI_SYNC_ONLY) syncWithServer('startup');
   }

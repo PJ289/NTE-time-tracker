@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [2.2.2] - 2026-06-05
+
+### Added
+- **Sync failure tray notifications (`.exe`)**: connection errors, auth failures (401), registration failures, and session upload errors show a tray balloon (same channel as update notices; 5-minute cooldown per error type to avoid spam).
+
+### Changed
+- **Auto-register policy (`.exe` / `tracker.js`)**: auto-register runs only when Device ID and token are both missing. Existing credentials in `client.json` or a full pair in `.env.client` skip registration; `.env.client` credentials also disable the auto-register flag at runtime.
+- **401 sync errors**: the client no longer clears stored credentials and registers a new device on auth failure; fix the token or device on the server or in config instead.
+- **Tray settings UI**: when Device ID and token are present, Auto-register is shown and saved as off.
+
+### Fixed
+- Auto-register could still run or replace credentials after a failed sync even when valid Device ID and token were already configured.
+
+---
+
 ## [2.2.1] - 2026-06-05
 
 ### Added
@@ -22,6 +37,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - **`--install` appeared to do nothing**: maintenance commands (`--install`, `--uninstall`, `--sync`, `--install-tray`, `--uninstall-tray`) no longer fell through into full tracker startup before exiting.
 - **Update check found a release but showed nothing**: Windows toast notifications were unreliable from the hidden process; replaced with tray balloon + dialog + dynamic menu item.
+- **`.env.client` vs `client.json` credentials**: when both `NTE_DEVICE_ID` and `NTE_DEVICE_TOKEN` are set in `.env.client`, they now override and sync to `client.json` instead of mixing with auto-registered values; config GUI keeps token on save if the field was left unchanged.
 
 ---
 
