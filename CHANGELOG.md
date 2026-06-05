@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [2.3.0-dev] - 2026-06-05
+## [2.3.0] - 2026-06-05
 
 ### Added
 - **Tray live status**: hover tooltip and top menu line show `Playing … | Total …` or `Idle | Total …` (updates every 2 s via `tray-status.txt`).
