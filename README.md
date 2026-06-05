@@ -208,7 +208,7 @@ Once per day at startup, the tracker checks GitHub for a newer release. By defau
 - A **tray balloon** notifies you (`.exe` / tray mode).
 - In **`.exe` mode**, if the release includes an **`nte-tracker.exe` asset**, you can install from the tray (**Check for Update** or **Install update vX.Y.Z**).
 
-> **Pre-releases** are ignored unless you set **`NTE_UPDATE_DEV_BUILDS=1`** in `.env.client` (also in **Edit Config**). Then the tracker looks for the newest GitHub **pre-release** that includes `nte-tracker.exe` (e.g. `v2.3.0-dev` from a dev branch release).
+> **Update channel** is set in **Edit Config** (or `NTE_UPDATE_CHANNEL` in `.env.client`): **stable** (default, `/releases/latest` only), **latest** (stable + pre-releases; at the same version stable wins over dev, so `v2.3.0` is offered over `v2.3.0-dev`), or **dev** (pre-releases only). Legacy `NTE_UPDATE_DEV_BUILDS=1` is treated as **dev** until you save settings again.
 
 #### How releases are published (maintainers)
 
@@ -306,7 +306,7 @@ NTE_SERVER_URL=http://192.168.1.10:28183
 # NTE_SYNC_ON_START=1
 # NTE_SYNC_ON_END=1
 # NTE_LOCAL_DASHBOARD=1
-# NTE_UPDATE_DEV_BUILDS=0
+# NTE_UPDATE_CHANNEL=stable
 ```
 
 On first successful sync, credentials are saved automatically to:
@@ -355,7 +355,7 @@ If the server already imported old local JSON as **PC (Legacy)**, use a fixed de
 | `NTE_LOCAL_DASHBOARD` | No | `1` | `1` = keep local dashboard at `http://127.0.0.1:27183` |
 | `NTE_TRAY` | No | `0` | `1` = show system tray when running `node tracker.js` (always on for `nte-tracker.exe`) |
 | `NTE_CONSOLE_LOG` | No | `0` | `1` = show a console window with live log output (useful for debugging; `.exe` logs to file by default) |
-| `NTE_UPDATE_DEV_BUILDS` | No | `0` | `1` = check GitHub **pre-releases** for updates (dev builds); `0` = stable `/releases/latest` only |
+| `NTE_UPDATE_CHANNEL` | No | `stable` | `stable` = `/releases/latest` only; `latest` = stable + pre-releases (stable wins same version); `dev` = pre-releases only. Legacy `NTE_UPDATE_DEV_BUILDS=1` maps to `dev`. |
 
 Flags accept `1`, `true`, `yes`, or `y` (case-insensitive).
 
@@ -744,7 +744,7 @@ schtasks /query /tn "NTETracker"
 ### Auto-update did not run
 
 - Auto-replace only works in **`nte-tracker.exe`** mode, not with `node tracker.js`.
-- By default, only **stable** releases are checked. For **pre-releases**, set `NTE_UPDATE_DEV_BUILDS=1` in `.env.client` and restart the tracker.
+- By default, only **stable** releases are checked (`NTE_UPDATE_CHANNEL=stable`). Use **latest** to follow dev builds too (stable still wins when a dev build graduates to the same version), or **dev** for pre-releases only.
 - The release must include an asset named like **`nte-tracker.exe`**.
 
 ### Dashboard does not load

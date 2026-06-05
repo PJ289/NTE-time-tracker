@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Local dashboard UI after live session-end**: SSE `session-end` now sends full `getDashboardData()` so `dashboardMode: local` is not lost; test delete + paging stay visible on reload (selection/combine remain server-only).
 
 ### Changed
+- **Update channel (client)**: `NTE_UPDATE_CHANNEL` dropdown in Edit Config replaces `NTE_UPDATE_DEV_BUILDS` — **Stable releases only**, **Latest (stable + dev)** (stable wins at the same version, e.g. `v2.3.0` over `v2.3.0-dev`), or **Dev pre-releases only**. Legacy `NTE_UPDATE_DEV_BUILDS=1` still maps to dev-only until saved from the UI.
 - **Minimum session length (client)**: default raised from 30 s to **5 min** (`300` s); quick logins are not saved, synced, or notified. Configurable in Edit Config or via `NTE_MIN_SESSION_SECONDS` in `.env.client`.
 - **Tray / double-click Open Dashboard** prefers the **server** URL when `NTE_SERVER_URL` is set; local remains available as its own menu item when `NTE_LOCAL_DASHBOARD=1`.
 - **Auto-open dashboard target** in Edit Config is now a dropdown (Auto / Local / Server) instead of free text.

@@ -53,13 +53,68 @@ const APP_VERSION = (function () {
 
 const GITHUB_REPO = 'PJ289/NTE-time-tracker';
 
-function semverGt(a, b) {
-  const parse = (v) => String(v).split('.').map((n) => parseInt(n, 10) || 0);
-  const [aMaj, aMin, aPatch] = parse(a);
-  const [bMaj, bMin, bPatch] = parse(b);
-  if (aMaj !== bMaj) return aMaj > bMaj;
-  if (aMin !== bMin) return aMin > bMin;
-  return aPatch > bPatch;
+function parseAppVersion(v) {
+  const s = String(v || '').replace(/^v/i, '');
+  const match = s.match(/^(\d+)\.(\d+)\.(\d+)(?:-(.+))?$/);
+  if (!match) {
+    const parts = s.split('.').map((n) => parseInt(n, 10) || 0);
+    return {
+      major: parts[0] || 0,
+      minor: parts[1] || 0,
+      patch: parts[2] || 0,
+      prerelease: null
+    };
+  }
+  return {
+    major: parseInt(match[1], 10) || 0,
+    minor: parseInt(match[2], 10) || 0,
+    patch: parseInt(match[3], 10) || 0,
+    prerelease: match[4] || null
+  };
+}
+
+function compareVersionCore(a, b) {
+  if (a.major !== b.major) return a.major - b.major;
+  if (a.minor !== b.minor) return a.minor - b.minor;
+  return a.patch - b.patch;
+}
+
+/** True when candidate is strictly newer than current (stable beats same-number pre-release). */
+function isVersionNewer(candidate, current) {
+  const c = parseAppVersion(candidate);
+  const cur = parseAppVersion(current);
+  const coreCmp = compareVersionCore(c, cur);
+  if (coreCmp > 0) return true;
+  if (coreCmp < 0) return false;
+  if (cur.prerelease && !c.prerelease) return true;
+  if (!cur.prerelease && c.prerelease) return false;
+  return false;
+}
+
+/** Prefer higher core version; at equal core, stable wins over pre-release. */
+function compareReleases(a, b) {
+  const va = parseAppVersion(a.version);
+  const vb = parseAppVersion(b.version);
+  const coreCmp = compareVersionCore(va, vb);
+  if (coreCmp !== 0) return coreCmp;
+  if (!va.prerelease && vb.prerelease) return 1;
+  if (va.prerelease && !vb.prerelease) return -1;
+  return 0;
+}
+
+function normalizeUpdateChannel(raw) {
+  const v = String(raw || '').trim().toLowerCase();
+  if (v === 'latest' || v === 'all') return 'latest';
+  if (v === 'dev' || v === 'prerelease' || v === 'pre') return 'dev';
+  return 'stable';
+}
+
+function resolveUpdateChannel() {
+  if (process.env.NTE_UPDATE_CHANNEL) {
+    return normalizeUpdateChannel(process.env.NTE_UPDATE_CHANNEL);
+  }
+  if (envFlag('NTE_UPDATE_DEV_BUILDS', false)) return 'dev';
+  return 'stable';
 }
 
 function loadEnvFile(filePath) {
@@ -259,7 +314,7 @@ const CONFIG = {
   autoOpenDashboardTarget: normalizeDashboardTarget(process.env.NTE_AUTO_OPEN_DASHBOARD_TARGET),
   trayStatusPeriod: normalizeTrayStatusPeriod(process.env.NTE_TRAY_STATUS_PERIOD),
   sessionEndNotify: envFlag('NTE_SESSION_END_NOTIFY', true),
-  updateDevBuilds: envFlag('NTE_UPDATE_DEV_BUILDS', false),
+  updateChannel: resolveUpdateChannel(),
   syncTimeoutMs: Number.isNaN(rawSyncTimeout) ? 8000 : rawSyncTimeout,
   queueLimit: Number.isNaN(rawQueueLimit) ? 500 : rawQueueLimit,
   get dataDir() {
@@ -970,7 +1025,7 @@ function loadPendingUpdateFromDisk() {
     if (!fs.existsSync(PENDING_UPDATE_FILE())) return null;
     const parsed = JSON.parse(fs.readFileSync(PENDING_UPDATE_FILE(), 'utf8'));
     if (!parsed || !parsed.version) return null;
-    if (!semverGt(parsed.version, APP_VERSION)) {
+    if (!isVersionNewer(parsed.version, APP_VERSION)) {
       clearPendingUpdate();
       return null;
     }
@@ -1091,8 +1146,29 @@ function releaseToUpdateInfo(release) {
   };
 }
 
+function pickBestGithubUpdate(candidates, currentVersion) {
+  let best = null;
+  for (let i = 0; i < candidates.length; i++) {
+    const info = candidates[i];
+    if (!info || !info.downloadUrl) continue;
+    if (!isVersionNewer(info.version, currentVersion)) continue;
+    if (!best || compareReleases(info, best) > 0) best = info;
+  }
+  return best;
+}
+
+function updateCheckChannelHint() {
+  if (CONFIG.updateChannel === 'dev') {
+    return 'No newer dev pre-release with nte-tracker.exe was found.';
+  }
+  if (CONFIG.updateChannel === 'latest') {
+    return 'No newer release with nte-tracker.exe was found.';
+  }
+  return 'Could not read the latest stable release.';
+}
+
 /**
- * Fetches the newest applicable GitHub release (stable latest, or newest pre-release when dev updates enabled).
+ * Fetches the newest applicable GitHub release for the configured update channel.
  */
 async function fetchLatestGithubRelease(signal) {
   const headers = {
@@ -1100,8 +1176,9 @@ async function fetchLatestGithubRelease(signal) {
     'Accept': 'application/vnd.github+json'
   };
   const base = 'https://api.github.com/repos/' + GITHUB_REPO;
+  const channel = CONFIG.updateChannel;
 
-  if (!CONFIG.updateDevBuilds) {
+  if (channel === 'stable') {
     const res = await fetch(base + '/releases/latest', { headers: headers, signal: signal });
     if (!res.ok) return null;
     return releaseToUpdateInfo(await res.json());
@@ -1112,21 +1189,35 @@ async function fetchLatestGithubRelease(signal) {
   const list = await res.json();
   if (!Array.isArray(list)) return null;
 
-  let best = null;
+  if (channel === 'dev') {
+    const candidates = [];
+    for (let i = 0; i < list.length; i++) {
+      const rel = list[i];
+      if (!rel || !rel.prerelease) continue;
+      const info = releaseToUpdateInfo(rel);
+      if (info) candidates.push(info);
+    }
+    return pickBestGithubUpdate(candidates, APP_VERSION);
+  }
+
+  const candidates = [];
+  const stableRes = await fetch(base + '/releases/latest', { headers: headers, signal: signal });
+  if (stableRes.ok) {
+    const stableInfo = releaseToUpdateInfo(await stableRes.json());
+    if (stableInfo) candidates.push(stableInfo);
+  }
   for (let i = 0; i < list.length; i++) {
     const rel = list[i];
     if (!rel || !rel.prerelease) continue;
     const info = releaseToUpdateInfo(rel);
-    if (!info || !info.downloadUrl) continue;
-    if (!semverGt(info.version, APP_VERSION)) continue;
-    if (!best || semverGt(info.version, best.version)) best = info;
+    if (info) candidates.push(info);
   }
-  return best;
+  return pickBestGithubUpdate(candidates, APP_VERSION);
 }
 
 /**
  * Checks GitHub releases for a newer tracker version.
- * Stable channel uses /releases/latest; dev channel uses the newest pre-release with nte-tracker.exe.
+ * Update channel: stable (/releases/latest), latest (stable + pre-releases; stable wins same version), or dev only.
  * Automatic checks run at most once per calendar day (clientState.lastUpdateCheck).
  * Returns true when a newer version is available.
  */
@@ -1162,10 +1253,7 @@ async function checkForUpdates(options) {
 
     if (!updateInfo) {
       if (manual) {
-        const hint = CONFIG.updateDevBuilds
-          ? 'No newer dev pre-release with nte-tracker.exe was found.'
-          : 'Could not read the latest stable release.';
-        showWindowsMessageBox('Update check failed. ' + hint, 'warning');
+        showWindowsMessageBox('Update check failed. ' + updateCheckChannelHint(), 'warning');
       }
       return false;
     }
@@ -1175,22 +1263,22 @@ async function checkForUpdates(options) {
       saveClientState(clientState);
     }
 
-    if (!semverGt(updateInfo.version, APP_VERSION)) {
+    if (!isVersionNewer(updateInfo.version, APP_VERSION)) {
       clearPendingUpdate();
-      const channel = CONFIG.updateDevBuilds ? 'dev pre-release ' : '';
       if (manual) {
         showWindowsMessageBox(
-          'No updates available. You are on the latest ' + channel + 'version (v' + APP_VERSION + ').',
+          'No updates available. You are on the latest version for this channel (v' + APP_VERSION + ').',
           'info'
         );
       }
       return false;
     }
 
-    if (!updateInfo.downloadUrl && CONFIG.updateDevBuilds) {
+    if (!updateInfo.downloadUrl) {
       if (manual) {
+        const kind = updateInfo.prerelease ? 'pre-release' : 'release';
         showWindowsMessageBox(
-          'A newer pre-release exists (v' + updateInfo.version + ') but has no nte-tracker.exe asset yet.',
+          'A newer ' + kind + ' exists (v' + updateInfo.version + ') but has no nte-tracker.exe asset yet.',
           'warning'
         );
       }
@@ -1434,7 +1522,7 @@ function openConfigWindow() {
     'NTE_MIN_SESSION_SECONDS',
     'NTE_TRAY',
     'NTE_CONSOLE_LOG',
-    'NTE_UPDATE_DEV_BUILDS'
+    'NTE_UPDATE_CHANNEL'
   ];
 
   const fields = [
@@ -1456,7 +1544,12 @@ function openConfigWindow() {
       ['Auto (server if set, else local)', ''],
       ['Local dashboard (this PC)', 'local'],
       ['Server dashboard', 'server']
-    ], 'Which dashboard opens when the game starts. Requires "Open dashboard when game starts" enabled. Restart to apply.']
+    ], 'Which dashboard opens when the game starts. Requires "Open dashboard when game starts" enabled. Restart to apply.'],
+    ['Update channel', 'NTE_UPDATE_CHANNEL', [
+      ['Stable releases only', 'stable'],
+      ['Latest (stable + dev)', 'latest'],
+      ['Dev pre-releases only', 'dev']
+    ], 'Which GitHub releases to check for nte-tracker.exe. Latest picks the newest version; at the same number, stable wins over dev (e.g. v2.3.0 over v2.3.0-dev). Restart to apply.']
   ];
   const checks = [
     ['Mark as test device', 'NTE_DEVICE_IS_TEST', false, 'Only when auto-registering a new device: marks the whole device as test on the server.'],
@@ -1468,8 +1561,7 @@ function openConfigWindow() {
     ['Open dashboard when game starts', 'NTE_AUTO_OPEN_DASHBOARD', true, 'Open a browser tab when HTGame.exe starts. Disable to leave the browser closed until you open it from the tray.'],
     ['Notify when session ends', 'NTE_SESSION_END_NOTIFY', true, 'Tray balloon after each gaming session with session, today, and total playtime.'],
     ['Tray in node mode', 'NTE_TRAY', false, 'Show the tray icon when running with node tracker.js. Always enabled for nte-tracker.exe.'],
-    ['Console debug logs', 'NTE_CONSOLE_LOG', false, 'Show a console window with live output. Useful for debugging only.'],
-    ['Dev pre-release updates', 'NTE_UPDATE_DEV_BUILDS', false, 'Check GitHub pre-releases for nte-tracker.exe instead of stable /releases/latest only. Enable to auto-update from dev builds (e.g. v2.3.0-dev).']
+    ['Console debug logs', 'NTE_CONSOLE_LOG', false, 'Show a console window with live output. Useful for debugging only.']
   ];
 
   const html = [
@@ -1514,8 +1606,8 @@ function openConfigWindow() {
     'function parseEnv(){var raw=readUtf8(cfgPath);var lines=raw.split(/\\r?\\n/);for(var i=0;i<lines.length;i++){var line=lines[i];var t=line.replace(/^\\s+|\\s+$/g,"");if(!t||t.charAt(0)==="#"||line.indexOf("=")<0){extras.push(line);continue;}var idx=line.indexOf("=");var k=line.substring(0,idx).replace(/^\\s+|\\s+$/g,"");var v=line.substring(idx+1).replace(/^\\s+|\\s+$/g,"");if(v.length>=2&&((v.charAt(0)==="\\""&&v.charAt(v.length-1)==="\\"")||(v.charAt(0)==="\\\'"&&v.charAt(v.length-1)==="\\\'")))v=v.substring(1,v.length-1);if(knownKeys.indexOf(k)>=0)values[k]=v;else extras.push(line);}}',
     'function readClientJson(){try{var raw=readUtf8(clientJsonPath);if(!raw)return null;return JSON.parse(raw);}catch(e){return null;}}',
     'function applyClientJsonFallback(){var cj=readClientJson();if(!cj)return;if(!values.NTE_DEVICE_ID&&cj.deviceId)values.NTE_DEVICE_ID=String(cj.deviceId);if(!values.NTE_DEVICE_TOKEN&&cj.deviceToken)values.NTE_DEVICE_TOKEN=String(cj.deviceToken);loadedCredentials.id=values.NTE_DEVICE_ID||"";loadedCredentials.token=values.NTE_DEVICE_TOKEN||"";}',
-    'function build(){parseEnv();applyClientJsonFallback();var root=document.getElementById("fields");for(var i=0;i<fields.length;i++){var f=fields[i];var block=document.createElement("div");block.className="field";block.innerHTML="<div class=\\"row\\"><label for=\\""+f[1]+"\\">"+f[0]+"</label><input id=\\""+f[1]+"\\" type=\\""+f[2]+"\\" /></div><div class=\\"help\\">"+f[3]+"</div>";root.appendChild(block);document.getElementById(f[1]).value=values[f[1]]||"";}for(var s=0;s<selects.length;s++){var sel=selects[s];var blockS=document.createElement("div");blockS.className="field";var rowS=document.createElement("div");rowS.className="row";var lblS=document.createElement("label");lblS.htmlFor=sel[1];lblS.appendChild(document.createTextNode(sel[0]));rowS.appendChild(lblS);var elS=document.createElement("select");elS.id=sel[1];for(var o=0;o<sel[2].length;o++){var opt=document.createElement("option");opt.value=sel[2][o][1];opt.appendChild(document.createTextNode(sel[2][o][0]));elS.appendChild(opt);}rowS.appendChild(elS);blockS.appendChild(rowS);var helpS=document.createElement("div");helpS.className="help";helpS.appendChild(document.createTextNode(sel[3]));blockS.appendChild(helpS);root.appendChild(blockS);var cur=values.hasOwnProperty(sel[1])?String(values[sel[1]]).toLowerCase():"";var matched="";for(var ox=0;ox<sel[2].length;ox++){if(String(sel[2][ox][1]).toLowerCase()===cur){matched=sel[2][ox][1];break;}}elS.value=matched;}var hasCreds=Boolean((values.NTE_DEVICE_ID||loadedCredentials.id)&&(values.NTE_DEVICE_TOKEN||loadedCredentials.token));for(var j=0;j<checks.length;j++){var c=checks[j];var block2=document.createElement("div");block2.className="field check";block2.innerHTML="<div class=\\"row\\"><label><input id=\\""+c[1]+"\\" type=\\"checkbox\\" /> "+c[0]+"</label></div><div class=\\"help\\">"+c[3]+"</div>";root.appendChild(block2);var checked=values.hasOwnProperty(c[1])?isTrue(values[c[1]]):c[2];if(c[1]==="NTE_DEVICE_AUTO_REGISTER"&&hasCreds)checked=false;document.getElementById(c[1]).checked=checked;}window.resizeTo(760,720);window.focus();}',
-    'function save(){var lines=["# NTE Tracker client config","# Generated by tray settings UI"];for(var i=0;i<fields.length;i++){var f=fields[i];var v=document.getElementById(f[1]).value.replace(/^\\s+|\\s+$/g,"");if(f[1]==="NTE_DEVICE_ID"&&!v&&loadedCredentials.id)v=loadedCredentials.id;if(f[1]==="NTE_DEVICE_TOKEN"&&!v&&loadedCredentials.token)v=loadedCredentials.token;if(v)lines.push(f[1]+"="+v);}for(var s=0;s<selects.length;s++){var sel=selects[s];var sv=document.getElementById(sel[1]).value.replace(/^\\s+|\\s+$/g,"");if(sel[1]==="NTE_AUTO_OPEN_DASHBOARD_TARGET"){sv=sv.toLowerCase();if(sv)lines.push(sel[1]+"="+sv);}else{lines.push(sel[1]+"="+sv);}}var savedId=(document.getElementById("NTE_DEVICE_ID")&&document.getElementById("NTE_DEVICE_ID").value.replace(/^\\s+|\\s+$/g,""))||loadedCredentials.id;var savedTok=(document.getElementById("NTE_DEVICE_TOKEN")&&document.getElementById("NTE_DEVICE_TOKEN").value.replace(/^\\s+|\\s+$/g,""))||loadedCredentials.token;for(var j=0;j<checks.length;j++){var c=checks[j];var checked=document.getElementById(c[1]).checked;if(c[1]==="NTE_DEVICE_AUTO_REGISTER"&&savedId&&savedTok)checked=false;lines.push(c[1]+"="+(checked?"1":"0"));}lines.push("");for(var k=0;k<extras.length;k++){var line=extras[k];var t=line.replace(/^\\s+|\\s+$/g,"");if(!t||t.charAt(0)==="#"||line.indexOf("=")<0)continue;var key=line.substring(0,line.indexOf("=")).replace(/^\\s+|\\s+$/g,"");if(knownKeys.indexOf(key)<0)lines.push(line);}writeUtf8(cfgPath,lines.join("\\r\\n"));var msg="Settings saved. Restart the tracker to apply changes.";if(savedId&&savedTok)msg+="\\n\\nDevice ID/token in .env.client override client.json on restart. Auto-register is off while both are set.";alert(msg);window.close();}',
+    'function build(){parseEnv();applyClientJsonFallback();if(!values.NTE_UPDATE_CHANNEL&&isTrue(values.NTE_UPDATE_DEV_BUILDS))values.NTE_UPDATE_CHANNEL="dev";var root=document.getElementById("fields");for(var i=0;i<fields.length;i++){var f=fields[i];var block=document.createElement("div");block.className="field";block.innerHTML="<div class=\\"row\\"><label for=\\""+f[1]+"\\">"+f[0]+"</label><input id=\\""+f[1]+"\\" type=\\""+f[2]+"\\" /></div><div class=\\"help\\">"+f[3]+"</div>";root.appendChild(block);document.getElementById(f[1]).value=values[f[1]]||"";}for(var s=0;s<selects.length;s++){var sel=selects[s];var blockS=document.createElement("div");blockS.className="field";var rowS=document.createElement("div");rowS.className="row";var lblS=document.createElement("label");lblS.htmlFor=sel[1];lblS.appendChild(document.createTextNode(sel[0]));rowS.appendChild(lblS);var elS=document.createElement("select");elS.id=sel[1];for(var o=0;o<sel[2].length;o++){var opt=document.createElement("option");opt.value=sel[2][o][1];opt.appendChild(document.createTextNode(sel[2][o][0]));elS.appendChild(opt);}rowS.appendChild(elS);blockS.appendChild(rowS);var helpS=document.createElement("div");helpS.className="help";helpS.appendChild(document.createTextNode(sel[3]));blockS.appendChild(helpS);root.appendChild(blockS);var cur=values.hasOwnProperty(sel[1])?String(values[sel[1]]).toLowerCase():"";if(sel[1]==="NTE_UPDATE_CHANNEL"&&!cur)cur="stable";var matched="";for(var ox=0;ox<sel[2].length;ox++){if(String(sel[2][ox][1]).toLowerCase()===cur){matched=sel[2][ox][1];break;}}elS.value=matched||sel[2][0][1];}var hasCreds=Boolean((values.NTE_DEVICE_ID||loadedCredentials.id)&&(values.NTE_DEVICE_TOKEN||loadedCredentials.token));for(var j=0;j<checks.length;j++){var c=checks[j];var block2=document.createElement("div");block2.className="field check";block2.innerHTML="<div class=\\"row\\"><label><input id=\\""+c[1]+"\\" type=\\"checkbox\\" /> "+c[0]+"</label></div><div class=\\"help\\">"+c[3]+"</div>";root.appendChild(block2);var checked=values.hasOwnProperty(c[1])?isTrue(values[c[1]]):c[2];if(c[1]==="NTE_DEVICE_AUTO_REGISTER"&&hasCreds)checked=false;document.getElementById(c[1]).checked=checked;}window.resizeTo(760,720);window.focus();}',
+    'function save(){var lines=["# NTE Tracker client config","# Generated by tray settings UI"];for(var i=0;i<fields.length;i++){var f=fields[i];var v=document.getElementById(f[1]).value.replace(/^\\s+|\\s+$/g,"");if(f[1]==="NTE_DEVICE_ID"&&!v&&loadedCredentials.id)v=loadedCredentials.id;if(f[1]==="NTE_DEVICE_TOKEN"&&!v&&loadedCredentials.token)v=loadedCredentials.token;if(v)lines.push(f[1]+"="+v);}for(var s=0;s<selects.length;s++){var sel=selects[s];var sv=document.getElementById(sel[1]).value.replace(/^\\s+|\\s+$/g,"");if(sel[1]==="NTE_AUTO_OPEN_DASHBOARD_TARGET"){sv=sv.toLowerCase();if(sv)lines.push(sel[1]+"="+sv);}else if(sel[1]==="NTE_UPDATE_CHANNEL"){sv=sv.toLowerCase()||"stable";lines.push(sel[1]+"="+sv);}else{lines.push(sel[1]+"="+sv);}}var savedId=(document.getElementById("NTE_DEVICE_ID")&&document.getElementById("NTE_DEVICE_ID").value.replace(/^\\s+|\\s+$/g,""))||loadedCredentials.id;var savedTok=(document.getElementById("NTE_DEVICE_TOKEN")&&document.getElementById("NTE_DEVICE_TOKEN").value.replace(/^\\s+|\\s+$/g,""))||loadedCredentials.token;for(var j=0;j<checks.length;j++){var c=checks[j];var checked=document.getElementById(c[1]).checked;if(c[1]==="NTE_DEVICE_AUTO_REGISTER"&&savedId&&savedTok)checked=false;lines.push(c[1]+"="+(checked?"1":"0"));}lines.push("");for(var k=0;k<extras.length;k++){var line=extras[k];var t=line.replace(/^\\s+|\\s+$/g,"");if(!t||t.charAt(0)==="#"||line.indexOf("=")<0)continue;var key=line.substring(0,line.indexOf("=")).replace(/^\\s+|\\s+$/g,"");if(key==="NTE_UPDATE_DEV_BUILDS")continue;if(knownKeys.indexOf(key)<0)lines.push(line);}writeUtf8(cfgPath,lines.join("\\r\\n"));var msg="Settings saved. Restart the tracker to apply changes.";if(savedId&&savedTok)msg+="\\n\\nDevice ID/token in .env.client override client.json on restart. Auto-register is off while both are set.";alert(msg);window.close();}',
     '</script>',
     '</head>',
     '<body onload="build()">',
