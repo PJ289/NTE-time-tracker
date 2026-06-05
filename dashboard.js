@@ -476,9 +476,7 @@ function formatLastSeen(iso) {
 
 function isSessionMarkedTest(session) {
   if (!session) return false;
-  if (parseBool(session.isTest || session.is_test)) return true;
-  var device = resolveDevice(session);
-  return device ? parseBool(device.isTest) : false;
+  return parseBool(session.isTest || session.is_test);
 }
 
 function resolveDevice(session) {
@@ -1481,6 +1479,7 @@ function openEditModal(session) {
   var endInput = document.getElementById("edit-end");
   var deviceSelect = document.getElementById("edit-device");
   var manualInput = document.getElementById("edit-manual");
+  var testInput = document.getElementById("edit-test");
   var status = document.getElementById("edit-status");
 
   if (status) status.textContent = "";
@@ -1489,6 +1488,7 @@ function openEditModal(session) {
   populateDeviceSelect(deviceSelect, false);
   if (deviceSelect) deviceSelect.value = session.deviceId || (allDevices[0] ? allDevices[0].id : "");
   if (manualInput) manualInput.checked = !!session.isManual;
+  if (testInput) testInput.checked = isSessionMarkedTest(session);
   if (modal) modal.classList.add("open");
 }
 
@@ -1505,6 +1505,7 @@ function saveEditSession() {
   var endInput = document.getElementById("edit-end");
   var deviceSelect = document.getElementById("edit-device");
   var manualInput = document.getElementById("edit-manual");
+  var testInput = document.getElementById("edit-test");
   var status = document.getElementById("edit-status");
 
   var startIso = fromInputValue(startInput ? startInput.value : "");
@@ -1518,7 +1519,8 @@ function saveEditSession() {
     startTime: startIso,
     endTime: endIso,
     deviceId: deviceSelect ? deviceSelect.value : null,
-    isManual: manualInput ? manualInput.checked : false
+    isManual: manualInput ? manualInput.checked : false,
+    isTest: testInput ? testInput.checked : false
   };
 
   apiRequest("/api/sessions/" + editingSessionId, "PATCH", payload, true)

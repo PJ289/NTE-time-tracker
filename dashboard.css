@@ -1038,6 +1038,18 @@ td.device-cell {
   justify-content: flex-end;
 }
 
+.modal-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  color: #ddd;
+}
+
+.modal-toggle input {
+  accent-color: #4db8ff;
+}
+
 .modal-actions {
   display: flex;
   flex-wrap: wrap;

@@ -16,7 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Local dashboard UI**: `/data` includes `dashboardMode: local`; hides server-only tabs (Devices, Config), device filter, and session admin tools. Server dashboard unchanged (`dashboardMode: server`).
 - **Session-end notification**: tray balloon when a gaming session ends shows session, today, and total playtime (`NTE_SESSION_END_NOTIFY` in Edit Config; on by default).
 - **Test session uploads (client)**: `NTE_SESSIONS_AS_TEST` marks synced sessions with a TEST badge on the server (`Mark synced sessions as test` in Edit Config).
-- **Test sessions (local + server dashboard)**: `NTE_SESSIONS_AS_TEST` also tags local `data.json` sessions; filter **Test sessions only** and **Delete Test Sessions** work on the local dashboard (`DELETE /api/sessions/test` on port 27183) and on the server (admin token). Server requires DB schema v3 (auto-migrates on start).
+- **Test sessions (local + server dashboard)**: `NTE_SESSIONS_AS_TEST` also tags local `data.json` sessions; filter **Test sessions only** and **Delete Test Sessions** work on the local dashboard (`DELETE /api/sessions/test` on port 27183) and on the server (admin token). Server requires DB schema v3 (auto-migrates on start). Edit Session on the server dashboard can toggle the TEST badge per session (like Manual).
 - **Local dashboard UI after live session-end**: SSE `session-end` now sends full `getDashboardData()` so `dashboardMode: local` is not lost; test delete + paging stay visible on reload (selection/combine remain server-only).
 
 ### Changed
@@ -26,6 +26,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Auto-open dashboard target** in Edit Config is now a dropdown (Auto / Local / Server) instead of free text.
 
 ### Fixed
+- **TEST session badge**: session list now shows TEST only when `sessions.is_test` is set, not when the parent device is marked test (device test still appears on the Devices tab and in the device filter).
+- **Session merge test flag**: gap/overlap merges no longer inherit `is_test` from a previous test session when the incoming upload is not test.
+- **SQLite WAL**: server checkpoints the WAL periodically and on shutdown so `nte.db` is not left empty-looking while data lives only in `nte.db-wal`.
 - **`.exe` exited immediately** when port 27183 was already in use (e.g. another tracker instance): the process no longer calls `process.exit`; it disables the local dashboard for that session and continues with tray + sync.
 - **Silent startup failure** if hidden relaunch could not spawn a child process: the foreground process keeps running instead of exiting with an empty console flash.
 - **Open Local Dashboard** when the local server is off or port 27183 is busy: shows a warning dialog (and tray balloon) instead of opening a broken URL; startup port conflicts also notify once.

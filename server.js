@@ -238,6 +238,14 @@ function pickDeviceColor(db) {
   return "#" + crypto.randomBytes(3).toString("hex");
 }
 
+function checkpointWal(db, mode) {
+  try {
+    db.pragma("wal_checkpoint(" + (mode || "PASSIVE") + ")");
+  } catch (err) {
+    log("WAL checkpoint skipped: " + err.message);
+  }
+}
+
 function initDb() {
   ensureDir(DATA_DIR);
   let db;
@@ -256,6 +264,7 @@ function initDb() {
     throw err;
   }
   db.pragma("journal_mode = WAL");
+  checkpointWal(db, "PASSIVE");
   db.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
 
   const metaGet = db.prepare("SELECT value FROM meta WHERE key = ?");
@@ -1172,7 +1181,7 @@ function startServer(db) {
           for (let i = 0; i < rows.length; i++) {
             const item = normalizeIncomingSession(rows[i]);
             if (!item) continue;
-            item.isTest = parseBool(rows[i].isTest || rows[i].is_test) || bulkMarkTest;
+            item.isTest = bulkMarkTest || parseBool(rows[i].isTest || rows[i].is_test);
             normalized.push(item);
           }
           normalized.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
@@ -1531,7 +1540,6 @@ function absorbOverlappingSessions(db, deviceId, session, isManual, isTest) {
     if (!isNaN(rowStart)) unionStart = Math.min(unionStart, rowStart);
     if (!isNaN(rowEnd)) unionEnd = Math.max(unionEnd, rowEnd);
     if (row.isManual) mergedManual = 1;
-    if (row.isTest) mergedTest = 1;
     ids.push(row.id);
   }
 
@@ -1579,7 +1587,7 @@ function mergeWithPreviousSession(db, deviceId, session, isManual, isTest) {
     if (endMs <= lastEnd) return last.id;
     const newDuration = Math.max(0, Math.floor((endMs - lastStart) / 1000));
     const mergedIsManual = (last.isManual ? 1 : 0) || (isManual ? 1 : 0);
-    const mergedIsTest = (last.isTest ? 1 : 0) || (isTest ? 1 : 0);
+    const mergedIsTest = isTest ? 1 : 0;
     db.prepare(
       "UPDATE sessions SET end_time = ?, duration = ?, is_manual = ?, is_test = ?, updated_at = ? WHERE id = ?"
     ).run(new Date(endMs).toISOString(), newDuration, mergedIsManual, mergedIsTest, nowIso(), last.id);
@@ -1593,7 +1601,7 @@ function mergeWithPreviousSession(db, deviceId, session, isManual, isTest) {
   const newEnd = Math.max(lastEnd, endMs);
   const newDuration = Math.max(0, Math.floor((newEnd - newStart) / 1000));
   const mergedIsManual = (last.isManual ? 1 : 0) || (isManual ? 1 : 0);
-  const mergedIsTest = (last.isTest ? 1 : 0) || (isTest ? 1 : 0);
+  const mergedIsTest = isTest ? 1 : 0;
 
   db.prepare(
     "UPDATE sessions SET start_time = ?, end_time = ?, duration = ?, is_manual = ?, is_test = ?, updated_at = ? WHERE id = ?"
@@ -1631,5 +1639,30 @@ function insertSessionWithMerge(db, deviceId, session, isManual, isTest) {
 }
 
 const db = initDb();
+const WAL_CHECKPOINT_MS = 10 * 60 * 1000;
+const walCheckpointTimer = setInterval(function () {
+  checkpointWal(db, "TRUNCATE");
+}, WAL_CHECKPOINT_MS);
+if (typeof walCheckpointTimer.unref === "function") walCheckpointTimer.unref();
+
+function shutdownDb() {
+  clearInterval(walCheckpointTimer);
+  checkpointWal(db, "TRUNCATE");
+  try {
+    db.close();
+  } catch (err) {
+    log("Database close skipped: " + err.message);
+  }
+}
+
+process.on("SIGINT", function () {
+  shutdownDb();
+  process.exit(0);
+});
+process.on("SIGTERM", function () {
+  shutdownDb();
+  process.exit(0);
+});
+
 log(CONFIG.gameName + " Server started");
 startServer(db);
