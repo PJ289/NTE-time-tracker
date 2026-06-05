@@ -4,15 +4,38 @@
  * Serves a live dashboard via local HTTP server with Server-Sent Events
  */
 
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const os = require('os');
 
+const IS_SEA = (function () {
+  const exe = process.execPath.toLowerCase();
+  return !exe.endsWith('node.exe') && !exe.endsWith('node') && !exe.endsWith('node.exe"');
+})();
+
+/** Folder for .env.client and optional sidecar files; exe directory in SEA mode. */
+const APP_ROOT = IS_SEA ? path.dirname(process.execPath) : __dirname;
+
+function readBundledFile(relativePath, encoding) {
+  const key = relativePath.replace(/\\/g, '/');
+  if (IS_SEA) {
+    try {
+      const { getAsset } = require('node:sea');
+      if (encoding) return getAsset(key, encoding);
+      return getAsset(key);
+    } catch (e) {
+      // fall through to filesystem
+    }
+  }
+  const fullPath = path.join(APP_ROOT, relativePath);
+  return encoding ? fs.readFileSync(fullPath, encoding) : fs.readFileSync(fullPath);
+}
+
 const APP_VERSION = (function () {
   try {
-    return JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version || '0.0.0';
+    return JSON.parse(readBundledFile('package.json', 'utf8')).version || '0.0.0';
   } catch (e) {
     return '0.0.0';
   }
@@ -47,14 +70,35 @@ function loadEnvFile(filePath) {
   }
 }
 
-loadEnvFile(path.join(__dirname, '.env.client'));
-loadEnvFile(path.join(__dirname, '.env'));
+loadEnvFile(path.join(APP_ROOT, '.env.client'));
+loadEnvFile(path.join(APP_ROOT, '.env'));
 
 function envFlag(name, defaultValue) {
   if (process.env[name] === undefined) return defaultValue;
   const value = String(process.env[name]).trim().toLowerCase();
   return value === '1' || value === 'true' || value === 'yes' || value === 'y';
 }
+
+function maybeRelaunchSeaInBackground() {
+  if (!IS_SEA || !process.platform.startsWith('win')) return;
+  if (process.env.NTE_SEA_BACKGROUND === '1') return;
+  if (envFlag('NTE_CONSOLE_LOG', false)) return;
+
+  const args = process.argv.slice(2);
+  if (args.includes('--install') || args.includes('--uninstall') || args.includes('--sync')) return;
+
+  const childEnv = Object.assign({}, process.env, { NTE_SEA_BACKGROUND: '1' });
+  spawn(process.execPath, args, {
+    cwd: APP_ROOT,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+    env: childEnv
+  }).unref();
+  process.exit(0);
+}
+
+maybeRelaunchSeaInBackground();
 
 function normalizeServerUrl(url) {
   if (!url) return '';
@@ -133,7 +177,17 @@ function formatTime(seconds) {
  */
 function log(msg) {
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
-  console.log('[' + timestamp + '] ' + msg);
+  const line = '[' + timestamp + '] ' + msg;
+  const showConsole = !IS_SEA || envFlag('NTE_CONSOLE_LOG', false);
+  if (showConsole) console.log(line);
+  if (IS_SEA) {
+    try {
+      ensureDataDirectory();
+      fs.appendFileSync(path.join(CONFIG.dataDir, 'tracker.log'), line + '\n', 'utf8');
+    } catch (e) {
+      if (showConsole) console.error('Log write failed: ' + e.message);
+    }
+  }
 }
 
 /**
@@ -684,6 +738,141 @@ function openDashboard() {
   log('Opened dashboard in browser');
 }
 
+function jsLiteral(value) {
+  return JSON.stringify(String(value));
+}
+
+function launchHtaGui(fileName, htmlContent) {
+  ensureDataDirectory();
+  const htaPath = path.join(CONFIG.dataDir, fileName);
+  fs.writeFileSync(htaPath, htmlContent, 'utf8');
+  const child = spawn('mshta.exe', [htaPath], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: false
+  });
+  child.on('error', (err) => log('GUI launch error (' + fileName + '): ' + err.message));
+  child.unref();
+}
+
+function openLogsWindow() {
+  ensureDataDirectory();
+  const logPath = path.join(CONFIG.dataDir, 'tracker.log');
+  if (!fs.existsSync(logPath)) fs.writeFileSync(logPath, '', 'utf8');
+
+  const html = [
+    '<!doctype html>',
+    '<html>',
+    '<head>',
+    '<meta http-equiv="x-ua-compatible" content="IE=11">',
+    '<title>NTE Tracker Logs</title>',
+    '<hta:application id="nteLogs" applicationname="NTE Tracker Logs" border="thin" caption="yes" maximizebutton="yes" minimizebutton="yes" sysmenu="yes" scroll="no" singleinstance="no" />',
+    '<style>',
+    'body{font-family:Segoe UI,Arial,sans-serif;margin:0;background:#111;color:#eee;}',
+    '#bar{height:44px;padding:8px;background:#1f1f1f;box-sizing:border-box;}',
+    'button{height:28px;margin-right:8px;}',
+    '#log{position:absolute;left:0;right:0;top:44px;bottom:0;width:100%;height:calc(100% - 44px);box-sizing:border-box;background:#0b0b0b;color:#ddd;border:0;padding:10px;font-family:Consolas,monospace;font-size:12px;white-space:pre;overflow:scroll;}',
+    '</style>',
+    '<script language="javascript">',
+    'var logPath=' + jsLiteral(logPath) + ';',
+    'function readUtf8(path){try{var s=new ActiveXObject("ADODB.Stream");s.Type=2;s.Charset="utf-8";s.Open();s.LoadFromFile(path);var t=s.ReadText();s.Close();return t;}catch(e){return "Unable to read log: "+e.message;}}',
+    'function refreshLog(){var el=document.getElementById("log");el.value=readUtf8(logPath);el.scrollTop=el.scrollHeight;}',
+    'function openLocation(){new ActiveXObject("WScript.Shell").Run("explorer.exe /select,\\"" + logPath + "\\"",1,false);}',
+    'window.onload=function(){window.resizeTo(920,680);refreshLog();window.focus();};',
+    '</script>',
+    '</head>',
+    '<body>',
+    '<div id="bar"><button onclick="refreshLog()">Refresh</button><button onclick="openLocation()">Open file location</button></div>',
+    '<textarea id="log" readonly></textarea>',
+    '</body>',
+    '</html>'
+  ].join('\r\n');
+
+  launchHtaGui('logs-viewer.hta', html);
+}
+
+function openConfigWindow() {
+  const cfgPath = path.join(APP_ROOT, '.env.client');
+  if (!fs.existsSync(cfgPath)) {
+    fs.writeFileSync(cfgPath, '# NTE Tracker client config\r\n# NTE_SERVER_URL=http://192.168.1.10:28183\r\n', 'utf8');
+  }
+
+  const knownKeys = [
+    'NTE_SERVER_URL',
+    'NTE_DEVICE_NAME',
+    'NTE_DEVICE_TYPE',
+    'NTE_DEVICE_ID',
+    'NTE_DEVICE_TOKEN',
+    'NTE_DEVICE_IS_TEST',
+    'NTE_DEVICE_AUTO_REGISTER',
+    'NTE_SYNC_ON_START',
+    'NTE_SYNC_ON_END',
+    'NTE_LOCAL_DASHBOARD',
+    'NTE_TRAY',
+    'NTE_CONSOLE_LOG'
+  ];
+
+  const fields = [
+    ['Server URL', 'NTE_SERVER_URL', 'text'],
+    ['Device name', 'NTE_DEVICE_NAME', 'text'],
+    ['Device type', 'NTE_DEVICE_TYPE', 'text'],
+    ['Device ID', 'NTE_DEVICE_ID', 'text'],
+    ['Device token', 'NTE_DEVICE_TOKEN', 'password']
+  ];
+  const checks = [
+    ['Mark as test device', 'NTE_DEVICE_IS_TEST', false],
+    ['Auto-register device', 'NTE_DEVICE_AUTO_REGISTER', true],
+    ['Sync on startup', 'NTE_SYNC_ON_START', true],
+    ['Sync after session', 'NTE_SYNC_ON_END', true],
+    ['Local dashboard', 'NTE_LOCAL_DASHBOARD', true],
+    ['Tray in node mode', 'NTE_TRAY', false],
+    ['Console debug logs', 'NTE_CONSOLE_LOG', false]
+  ];
+
+  const html = [
+    '<!doctype html>',
+    '<html>',
+    '<head>',
+    '<meta http-equiv="x-ua-compatible" content="IE=11">',
+    '<title>NTE Tracker Settings</title>',
+    '<hta:application id="nteSettings" applicationname="NTE Tracker Settings" border="thin" caption="yes" maximizebutton="no" minimizebutton="yes" sysmenu="yes" scroll="yes" singleinstance="no" />',
+    '<style>',
+    'body{font-family:Segoe UI,Arial,sans-serif;margin:16px;background:#f5f5f5;color:#222;}',
+    'h1{font-size:18px;margin:0 0 12px 0;}',
+    '.row{display:flex;align-items:center;margin:8px 0;}',
+    '.row label{width:180px;font-weight:600;}',
+    'input[type=text],input[type=password]{flex:1;padding:6px;border:1px solid #aaa;border-radius:3px;}',
+    '.check label{width:auto;font-weight:400;}',
+    '.actions{margin-top:16px;text-align:right;}',
+    'button{padding:6px 14px;margin-left:8px;}',
+    '.hint{color:#666;font-size:12px;margin-top:10px;}',
+    '</style>',
+    '<script language="javascript">',
+    'var cfgPath=' + jsLiteral(cfgPath) + ';',
+    'var knownKeys=' + JSON.stringify(knownKeys) + ';',
+    'var fields=' + JSON.stringify(fields) + ';',
+    'var checks=' + JSON.stringify(checks) + ';',
+    'var values={}; var extras=[];',
+    'function readUtf8(path){try{var s=new ActiveXObject("ADODB.Stream");s.Type=2;s.Charset="utf-8";s.Open();s.LoadFromFile(path);var t=s.ReadText();s.Close();return t;}catch(e){return "";}}',
+    'function writeUtf8(path,text){var s=new ActiveXObject("ADODB.Stream");s.Type=2;s.Charset="utf-8";s.Open();s.WriteText(text);s.SaveToFile(path,2);s.Close();}',
+    'function isTrue(v){v=String(v||"").toLowerCase();return v==="1"||v==="true"||v==="yes"||v==="y";}',
+    'function parseEnv(){var raw=readUtf8(cfgPath);var lines=raw.split(/\\r?\\n/);for(var i=0;i<lines.length;i++){var line=lines[i];var t=line.replace(/^\\s+|\\s+$/g,"");if(!t||t.charAt(0)==="#"||line.indexOf("=")<0){extras.push(line);continue;}var idx=line.indexOf("=");var k=line.substring(0,idx).replace(/^\\s+|\\s+$/g,"");var v=line.substring(idx+1).replace(/^\\s+|\\s+$/g,"");if(v.length>=2&&((v.charAt(0)==="\\""&&v.charAt(v.length-1)==="\\"")||(v.charAt(0)==="\\\'"&&v.charAt(v.length-1)==="\\\'")))v=v.substring(1,v.length-1);if(knownKeys.indexOf(k)>=0)values[k]=v;else extras.push(line);}}',
+    'function build(){parseEnv();var root=document.getElementById("fields");for(var i=0;i<fields.length;i++){var f=fields[i];var row=document.createElement("div");row.className="row";row.innerHTML="<label>"+f[0]+"</label><input id=\\""+f[1]+"\\" type=\\""+f[2]+"\\" />";root.appendChild(row);document.getElementById(f[1]).value=values[f[1]]||"";}for(var j=0;j<checks.length;j++){var c=checks[j];var row2=document.createElement("div");row2.className="row check";row2.innerHTML="<label><input id=\\""+c[1]+"\\" type=\\"checkbox\\" /> "+c[0]+"</label>";root.appendChild(row2);document.getElementById(c[1]).checked=values.hasOwnProperty(c[1])?isTrue(values[c[1]]):c[2];}window.resizeTo(740,620);window.focus();}',
+    'function save(){var lines=["# NTE Tracker client config","# Generated by tray settings UI"];for(var i=0;i<fields.length;i++){var f=fields[i];var v=document.getElementById(f[1]).value.replace(/^\\s+|\\s+$/g,"");if(v)lines.push(f[1]+"="+v);}for(var j=0;j<checks.length;j++){var c=checks[j];lines.push(c[1]+"="+(document.getElementById(c[1]).checked?"1":"0"));}lines.push("");for(var k=0;k<extras.length;k++){var line=extras[k];var t=line.replace(/^\\s+|\\s+$/g,"");if(!t||t.charAt(0)==="#"||line.indexOf("=")<0)continue;var key=line.substring(0,line.indexOf("=")).replace(/^\\s+|\\s+$/g,"");if(knownKeys.indexOf(key)<0)lines.push(line);}writeUtf8(cfgPath,lines.join("\\r\\n"));alert("Settings saved. Restart the tracker to apply changes.");window.close();}',
+    '</script>',
+    '</head>',
+    '<body onload="build()">',
+    '<h1>NTE Tracker Settings</h1>',
+    '<div id="fields"></div>',
+    '<div class="hint">Saved changes apply after restarting the tracker.</div>',
+    '<div class="actions"><button onclick="save()">Save</button><button onclick="window.close()">Cancel</button></div>',
+    '</body>',
+    '</html>'
+  ].join('\r\n');
+
+  launchHtaGui('config-editor.hta', html);
+}
+
 /**
  * Regenerates the human-readable playtime log from session history
  */
@@ -773,9 +962,8 @@ var STATIC_FILES = {};
   };
   for (var route in files) {
     var f = files[route];
-    var fullPath = path.join(__dirname, f.path);
     try {
-      var content = f.encoding ? fs.readFileSync(fullPath, f.encoding) : fs.readFileSync(fullPath);
+      var content = f.encoding ? readBundledFile(f.path, f.encoding) : readBundledFile(f.path, null);
       STATIC_FILES[route] = { content: content, type: f.type };
       if (f.cache) STATIC_FILES[route].cache = f.cache;
     } catch (e) {
@@ -889,11 +1077,6 @@ function generateShareCard() {
 
 // ── Tray Icon (SEA / Windows) ─────────────────────────────────────────────────
 
-const IS_SEA = (function () {
-  const exe = process.execPath.toLowerCase();
-  return !exe.endsWith('node.exe') && !exe.endsWith('node') && !exe.endsWith('node.exe"');
-})();
-
 const TRAY_ENABLED = IS_SEA || envFlag('NTE_TRAY', false);
 
 const TRAY_CMD_FILE = path.join(os.tmpdir(), 'nte-tray-' + process.pid + '.cmd');
@@ -941,6 +1124,7 @@ function buildTrayScript() {
     '}',
     '',
     'Add-MenuItem "Open Dashboard" "open-dashboard"',
+    'Add-MenuItem "Open Logs" "open-logs"',
     'Add-MenuItem "-" ""',
     'Add-MenuItem "Edit Config (.env.client)" "edit-config"',
     'Add-MenuItem "Check for Update" "check-update"',
@@ -1005,12 +1189,12 @@ function handleTrayCommand(cmd) {
       dashboardOpened = false;
       openDashboard();
       break;
+    case 'open-logs': {
+      openLogsWindow();
+      break;
+    }
     case 'edit-config': {
-      const cfgPath = path.join(__dirname, '.env.client');
-      if (!fs.existsSync(cfgPath)) {
-        fs.writeFileSync(cfgPath, '# NTE Tracker client config\n# NTE_SERVER_URL=http://192.168.1.10:28183\n', 'utf8');
-      }
-      exec('notepad.exe "' + cfgPath + '"', { windowsHide: false });
+      openConfigWindow();
       break;
     }
     case 'check-update':
@@ -1127,7 +1311,7 @@ function installStartupTask() {
   const exePath = IS_SEA ? process.execPath : null;
   const taskCmd = exePath
     ? '"' + exePath + '"'
-    : 'wscript.exe "' + path.join(__dirname, 'launcher.vbs') + '"';
+    : 'wscript.exe "' + path.join(APP_ROOT, 'launcher.vbs') + '"';
 
   const cmds = [
     'schtasks /create /tn "NTETracker" /tr ' + taskCmd + ' /sc onlogon /rl limited /f',
@@ -1319,6 +1503,7 @@ log('Process: ' + CONFIG.processName);
 log('Poll interval: ' + CONFIG.pollInterval + 'ms');
 log('Data file: ' + CONFIG.dataFile);
 if (IS_SEA) log('Running as standalone .exe');
+if (IS_SEA) log('Log file: ' + path.join(CONFIG.dataDir, 'tracker.log'));
 if (TRAY_ENABLED) log('Tray icon: enabled');
 
 const args = process.argv.slice(2);

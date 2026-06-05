@@ -1,5 +1,17 @@
 {
   "main": "tracker.js",
   "output": "sea-prep.blob",
-  "disableExperimentalSEAWarning": true
+  "disableExperimentalSEAWarning": true,
+  "assets": {
+    "package.json": "package.json",
+    "dashboard.html": "dashboard.html",
+    "dashboard.css": "dashboard.css",
+    "dashboard.js": "dashboard.js",
+    "sw.js": "sw.js",
+    "manifest.webmanifest": "manifest.webmanifest",
+    "favicon.ico": "favicon.ico",
+    "bg.png": "bg.png",
+    "icons/icon-192.png": "icons/icon-192.png",
+    "icons/icon-512.png": "icons/icon-512.png"
+  }
 }
