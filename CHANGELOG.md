@@ -6,24 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [2.2.0-dev] - 2026-06-04
+## [2.2.0] - 2026-06-05
 
 ### Added
 - **Standalone PC client (`nte-tracker.exe`)**: Node.js [Single Executable Application (SEA)](https://nodejs.org/api/single-executable-applications.html) build — no separate Node.js install required on the target PC.
-- **System tray icon** (`.exe` mode, or `NTE_TRAY=1` with `node tracker.js`): right-click menu with Open Dashboard, Edit Config (`.env.client`), Check for Update, Restart, and Close. Double-click opens the dashboard.
+- **System tray icon** (`.exe` mode, or `NTE_TRAY=1` with `node tracker.js`): right-click menu with Open Dashboard, Open Logs, Edit Config, Check for Update, Restart, and Close. Double-click opens the dashboard.
+- **Tray GUI windows (HTA)**: **Open Logs** shows `%LOCALAPPDATA%\nte-tracker\tracker.log` in a dark viewer with auto-refresh; **Edit Config** opens a dark settings form for `.env.client` with brief descriptions and recommendations per option.
 - **Auto-update (`.exe` only)**: when a newer GitHub Release includes an `nte-tracker.exe` asset, the client can download and replace itself via a helper batch script, then restart.
 - **Startup install via executable**: `nte-tracker.exe --install` and `--uninstall` register or remove the `NTETracker` scheduled task (same task name as the legacy VBS flow).
-- **Local SEA build tooling**: `sea-config.json` and `build-exe.ps1` to compile `nte-tracker.exe` on a dev machine (Node.js 22+ recommended).
+- **File logging (`.exe` mode)**: tracker output is appended to `%LOCALAPPDATA%\nte-tracker\tracker.log` (viewable from the tray).
+- **Local SEA build tooling**: `sea-config.json` and `build-exe.ps1` to compile `nte-tracker.exe` on a dev machine (Node.js 22+ recommended), including custom icon patching via `resedit`/`pe-library`.
 - **CI — tracker EXE workflow**: `.github/workflows/build-tracker-exe.yml` builds `nte-tracker.exe` on `windows-latest` when a GitHub Release is **published**, and attaches it as a release asset. Can also be triggered manually from Actions (artifact only, or upload to a release).
+- **Docker log timezone**: `tzdata` in the server image and `TZ` in `docker-compose.yml` (default `Europe/Madrid`; override via `.env`).
 
 ### Changed
 - `install.bat`, `uninstall.bat`, and `restart.bat` detect `nte-tracker.exe` in the project folder and delegate to it; otherwise they fall back to the legacy `launcher.vbs` + `schtasks` flow.
-- `package.json` version bumped to `2.2.0-dev`.
+- `stop-tracker.ps1` stops both `nte-tracker.exe` and `node tracker.js` instances for the project folder.
+- **Log timestamps** use the PC or container local timezone instead of UTC (`tracker.js` and `server.js`).
+- **Config GUI** pre-fills Device ID and token from `client.json` when they are not set in `.env.client` (credentials after auto-register live in AppData, not in the project folder).
+- `sea-config.json` embeds dashboard assets (`sw.js`, manifest, icons) so the standalone `.exe` runs without missing-file warnings outside the source tree.
+- `package.json` version bumped to `2.2.0`.
+
+### Fixed
+- **SEA / tray reliability**: background relaunch hides the console window without converting the binary to a Windows GUI subsystem (which crashed SEA startup); tray log/config actions use `mshta.exe` HTA windows instead of hidden PowerShell WinForms or `notepad.exe` (which failed from the hidden process).
+- **Server sync auth (401)**: if stored credentials in `client.json` are rejected and auto-register is enabled (without fixed `.env.client` credentials), the client clears them and re-registers automatically.
+- **Icon patching**: `rcedit` replaced with `resedit`/`pe-library` in `build-exe.ps1` (rcedit hung or failed on the SEA binary).
 
 ### Notes
 - **Docker** images are still built automatically on push to `dev` / `main` — publishing a GitHub Release is **not** required for Docker.
-- **EXE builds** require publishing a GitHub Release (or running the workflow manually). A push to `dev` alone does not produce `nte-tracker.exe`.
+- **EXE builds** require publishing a GitHub Release (or running the workflow manually). A push to `dev` or `main` alone does not produce `nte-tracker.exe`.
 - The client's update check uses GitHub's `/releases/latest`, which returns only **stable** (non–pre-release) releases. Pre-releases must be downloaded manually from the Releases page.
+- `nte-tracker.exe` is ~80–90 MB because it embeds the Node runtime.
 
 ---
 
@@ -79,6 +92,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-[2.2.0-dev]: https://github.com/PJ289/NTE-time-tracker/releases/tag/v2.2.0-dev
+[2.2.0]: https://github.com/PJ289/NTE-time-tracker/releases/tag/v2.2.0
 [2.1.0]: https://github.com/PJ289/NTE-time-tracker/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/PJ289/NTE-time-tracker/releases/tag/v2.0.0

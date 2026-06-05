@@ -184,7 +184,8 @@ When running as **`nte-tracker.exe`**, a tray icon appears in the notification a
 | Action | How |
 |--------|-----|
 | Open dashboard | Double-click the icon, or **Open Dashboard** in the menu |
-| Edit server sync config | **Edit Config (.env.client)** — opens Notepad (creates the file if missing) |
+| View tracker log | **Open Logs** — dark log viewer with auto-refresh (`%LOCALAPPDATA%\nte-tracker\tracker.log`) |
+| Edit server sync config | **Edit Config** — settings form for `.env.client` (creates the file if missing; shows Device ID/token from `client.json` when applicable) |
 | Check for updates | **Check for Update** |
 | Restart tracker | **Restart** |
 | Exit | **Close** |
@@ -219,13 +220,13 @@ Once per day at startup, the tracker calls GitHub's **`/releases/latest`** API a
 **Typical dev workflow**
 
 1. Merge or push to **`dev`** → Docker image **`pj289/nte-time-tracker-nte-server:dev`** is updated automatically.
-2. Create a **Draft release** on GitHub from `dev`, tag e.g. **`v2.2.0-dev`**, mark **Pre-release**, publish → CI attaches **`nte-tracker.exe`**.
+2. Create a **Draft release** on GitHub from `dev`, tag e.g. **`v2.3.0-dev`**, mark **Pre-release**, publish → CI attaches **`nte-tracker.exe`**.
 3. Test the downloaded `.exe` on a Windows PC.
 
 **Stable release**
 
-1. Merge `dev` → `main`, bump version in `package.json`, update `CHANGELOG.md`.
-2. Tag **`vX.Y.Z`** on `main` and publish a **normal** (non–pre-release) GitHub Release → Docker `:latest` + `:X.Y.Z`, and **`nte-tracker.exe`** for clients that use auto-update.
+1. Merge `dev` → `main`, bump version in `package.json` (remove `-dev` suffix), update `CHANGELOG.md`.
+2. Tag **`vX.Y.Z`** on `main` (e.g. **`v2.2.0`**) and publish a **normal** (non–pre-release) GitHub Release → Docker `:latest` + `:X.Y.Z`, and **`nte-tracker.exe`** for clients that use auto-update.
 
 Workflow files: `.github/workflows/docker-publish.yml`, `.github/workflows/build-tracker-exe.yml`.
 
@@ -308,7 +309,7 @@ On first successful sync, credentials are saved automatically to:
 %LOCALAPPDATA%\nte-tracker\client.json
 ```
 
-You usually **do not** need to edit `client.json` by hand.
+You usually **do not** need to edit `client.json` by hand. The tray **Edit Config** window shows these credentials when they are not set in `.env.client`.
 
 #### Link this PC to existing “legacy” data on the server
 
@@ -347,6 +348,7 @@ If the server already imported old local JSON as **PC (Legacy)**, use a fixed de
 | `NTE_SYNC_ON_END` | No | `1` | Sync after each gaming session |
 | `NTE_LOCAL_DASHBOARD` | No | `1` | `1` = keep local dashboard at `http://127.0.0.1:27183` |
 | `NTE_TRAY` | No | `0` | `1` = show system tray when running `node tracker.js` (always on for `nte-tracker.exe`) |
+| `NTE_CONSOLE_LOG` | No | `0` | `1` = show a console window with live log output (useful for debugging; `.exe` logs to file by default) |
 
 Flags accept `1`, `true`, `yes`, or `y` (case-insensitive).
 
@@ -461,7 +463,7 @@ volumes:
 
 The entrypoint creates the directory and sets ownership for the `node` user (UID 1000) when possible.
 
-**Logs:** `docker compose logs -f`  
+**Logs:** `docker compose logs -f` (timestamps use the container timezone; default `Europe/Madrid` via `TZ` in `docker-compose.yml`, override in `.env`)  
 **Update image:** `docker compose pull && docker compose up -d`
 
 #### Build from source (developers)
@@ -506,6 +508,7 @@ Server reads `.env.server` (and falls back to `.env`).
 | `NTE_ADMIN_TOKEN` | — | Admin token (recommended) |
 | `NTE_MIN_SESSION_SECONDS` | `30` | Minimum session length |
 | `NTE_MERGE_GAP_SECONDS` | `120` | Auto-merge gap between sessions |
+| `TZ` | `Europe/Madrid` (Compose) | IANA timezone for server log timestamps in Docker |
 
 ### Device management (server dashboard)
 
@@ -751,6 +754,8 @@ schtasks /query /tn "NTETracker"
 ### Server sync does not work
 
 - Confirm `.env.client` is in the **project folder** (next to `tracker.js` or `nte-tracker.exe`), not in AppData.
+- Device credentials after auto-register are in **`%LOCALAPPDATA%\nte-tracker\client.json`** — empty Device ID/token in **Edit Config** does not mean sync is disabled if that file exists.
+- A **401** in the log usually means the server rejected the stored token (server recreated, URL changed, token rotated). With auto-register enabled, restart the tracker to re-register; or delete `client.json` and restart.
 - Check `NTE_SERVER_URL` (correct IP, port, no trailing slash).
 - If sync uses **HTTPS with a local self-signed cert**, Node may fail with certificate errors — use HTTP to the Node port or trust the cert on Windows ([PC sync and self-signed HTTPS](#pc-sync-and-self-signed-https)).
 - Run `sync.bat` or `node tracker.js --sync` and read console errors.
@@ -769,7 +774,7 @@ schtasks /query /tn "NTETracker"
 
 - Process must be `HTGame.exe`.
 - **Classic mode:** Node.js must be on PATH.
-- Run `node tracker.js` (classic) or check logs via Task Manager for `nte-tracker.exe`.
+- Run `node tracker.js` (classic), use tray **Open Logs** (`.exe` mode), or read `%LOCALAPPDATA%\nte-tracker\tracker.log`.
 
 ### Reset or adjust playtime
 
@@ -796,8 +801,9 @@ schtasks /query /tn "NTETracker"
 
 - Live dashboard (Server-Sent Events)
 - PWA dashboard (manifest + service worker) for mobile home-screen install
-- Standalone `.exe` with system tray (SEA build)
+- Standalone `.exe` with system tray (SEA build), log viewer, and config editor
 - Daily GitHub release check + Windows update toast; auto-update in `.exe` mode
+- Local-time log timestamps on PC client and server
 - Interim saves every 60 s while playing
 - Crash recovery on next startup
 - Last 100 sessions in local JSON
