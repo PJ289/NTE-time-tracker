@@ -313,7 +313,7 @@ function buildDeviceIndex(devices) {
 
 function getDeviceSessionCounts() {
   var counts = {};
-  var sessions = (DATA && DATA.sessions) || [];
+  var sessions = allSessions || [];
   for (var i = 0; i < sessions.length; i++) {
     var id = sessions[i].deviceId;
     if (!id) continue;
