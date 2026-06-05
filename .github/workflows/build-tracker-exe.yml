@@ -1,8 +1,5 @@
 name: Build Tracker EXE
 
-permissions:
-  contents: write
-
 on:
   release:
     types: [published]
@@ -16,6 +13,8 @@ on:
 jobs:
   build-exe:
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
@@ -45,9 +44,17 @@ jobs:
 
       - name: Upload to GitHub Release
         if: github.event_name == 'release' || github.event.inputs.upload_to_release == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: nte-tracker.exe
-          tag_name: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
+        shell: pwsh
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ("${{ github.event_name }}" -eq "release") {
+            $tag = "${{ github.event.release.tag_name }}"
+          } else {
+            $tag = gh release list --limit 1 --json tagName -q ".[0].tagName"
+          }
+          if (-not $tag) {
+            throw "No release tag found to upload nte-tracker.exe"
+          }
+          Write-Host "Uploading nte-tracker.exe to release $tag"
+          gh release upload $tag nte-tracker.exe --clobber

@@ -230,6 +230,8 @@ Once per day at startup, the tracker calls GitHub's **`/releases/latest`** API a
 
 Workflow files: `.github/workflows/docker-publish.yml`, `.github/workflows/build-tracker-exe.yml`.
 
+> **EXE upload failed with `Resource not accessible by integration`?** In the repo go to **Settings → Actions → General → Workflow permissions** and select **Read and write permissions**, then re-run **Build Tracker EXE** (Actions tab → failed run → Re-run, or run manually with **Upload to latest release** checked).
+
 ### Batch scripts (`.bat`)
 
 All `.bat` files live in the **same folder** as `tracker.js` or `nte-tracker.exe` (your project folder).
